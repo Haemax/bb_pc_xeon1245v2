@@ -1,0 +1,160 @@
+diff -ruN a/docs/parallel_gpu.md b/docs/parallel_gpu.md
+--- a/docs/parallel_gpu.md	2026-10-16 21:38:19.884304339 +0000
++++ b/docs/parallel_gpu.md	2026-10-16 21:38:19.902441491 +0000
+@@ -576,3 +576,17 @@
+ (`IsGpuSideThreadId` accepts only stage B). Next: a run with `BB_WRITE_LOG=1` that crashes
+ prints which logged write landed near the corrupted block; bisect the pipeline toggles
+ (38 tasks, 39 pending fence waits, 41 recorder fences, 42 memory writes, 36 constant ring).
++
++## Stage A's wait for stage B on a 4 core / 8 thread CPU (Xeon E3-1245 v2)
++
++`Frame stats` there: stage B busy 93-95%, stage A waiting 50-55% of its time at the one drain per
++frame (`OnSubmit`), 14.9-15.9 us/draw on the GPU thread (6.5-7.7 on a 16 thread CPU). perf of
++stage A: ~19% of its samples are the `sched_yield` loop of `DrawPipe::Drain`. The texture helper
++(`BB_TEXTURE_HELPER=1`) binds ~95% of the textures in parallel and changes nothing: GPU thread
++time per frame 13.45 ms without, 13.70 ms with.
++
++`BB_DRAIN_SLEEP_US=N` (default 0 = as before): once a wait for stage B has lasted
++`BB_DRAIN_YIELD_US` (20 us) stage A sleeps N us at a time instead of yielding. Stage B is not
++touched. Stand-alone test of the loop (7 ms wait): waiter CPU 101% -> 43% (N=30), 19% (N=100);
++the waiter resumes 30-46 us after the release. Not yet measured in game: A/B with
++`tools/xeon_ab.sh 120 drain50 drain100` (compare us/draw and FPS against `gc`).
+diff -ruN a/gpu/shadps4/video_core/renderer_vulkan/vk_draw_pipe.h b/gpu/shadps4/video_core/renderer_vulkan/vk_draw_pipe.h
+--- a/gpu/shadps4/video_core/renderer_vulkan/vk_draw_pipe.h	2026-10-16 21:38:19.893949138 +0000
++++ b/gpu/shadps4/video_core/renderer_vulkan/vk_draw_pipe.h	2026-10-16 21:38:19.912288975 +0000
+@@ -21,6 +21,8 @@
+ #include <cstring>
+ #include <memory>
+ #include <thread>
++#include <time.h>
++#include <sys/prctl.h>
+ #include <x86intrin.h>
+ 
+ #include "common/assert.h"
+@@ -102,6 +104,55 @@
+     std::array<u64, NumReasons> drains_by_reason{};
+     std::array<u64, NumReasons> cycles_by_reason{};
+ 
++    /// Stage A: waits for stage B (Drain, WaitForPacket) until `done()` holds. 4096 pauses (a
++    /// packet or two), then yields. Stage A waits ~50% of its time here on a 4 core / 8 thread
++    /// CPU (stage B is the slower stage), and a sched_yield loop keeps its hardware thread, and the
++    /// core it shares with another thread, busy for all of it. BB_DRAIN_SLEEP_US=N (default 0:
++    /// yield until done, as before) sleeps N us at a time once the wait has lasted
++    /// BB_DRAIN_YIELD_US (default 20) us; stage B is not involved, so a missed wake-up cannot
++    /// happen, and stage A resumes at most about N us after stage B ran dry.
++    template <typename Done>
++    static void WaitFor(Done&& done) {
++        static const u32 sleep_us = EnvMicros("BB_DRAIN_SLEEP_US", 0);
++        static const u32 yield_us = EnvMicros("BB_DRAIN_YIELD_US", 20);
++        std::chrono::steady_clock::time_point sleep_from{};
++        for (u32 spins = 0; !done(); ++spins) {
++            if (spins < 4096) {
++                __builtin_ia32_pause();
++                continue;
++            }
++            if (sleep_us == 0) {
++                std::this_thread::yield();
++                continue;
++            }
++            if (spins == 4096) {
++                sleep_from = std::chrono::steady_clock::now() + std::chrono::microseconds(yield_us);
++            }
++            if (std::chrono::steady_clock::now() < sleep_from) {
++                std::this_thread::yield();
++                continue;
++            }
++            ShortSleep(sleep_us);
++        }
++    }
++
++    [[nodiscard]] static u32 EnvMicros(const char* name, u32 fallback) {
++        const char* env = std::getenv(name);
++        return env && env[0] ? static_cast<u32>(std::max(0, std::atoi(env))) : fallback;
++    }
++
++    /// Sleeps `us` microseconds. The default timer slack (50 us) would make a 30 us sleep last
++    /// ~80, so the calling thread (stage A) gets a 1 us slack the first time.
++    static void ShortSleep(u32 us) {
++        static thread_local bool slack_set = false;
++        if (!slack_set) {
++            prctl(PR_SET_TIMERSLACK, 1000UL, 0UL, 0UL, 0UL);
++            slack_set = true;
++        }
++        timespec ts{0, static_cast<long>(us) * 1000};
++        nanosleep(&ts, nullptr);
++    }
++
+     /// Stage A: waits until stage B has run every committed packet.
+     void Drain(u32 reason = ReasonRasterizer) {
+         if (consumed.load(std::memory_order_acquire) == head) {
+@@ -111,13 +162,7 @@
+         const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
+         ++drains_by_reason[slot];
+         const u64 start = __rdtsc();
+-        for (u32 spins = 0; consumed.load(std::memory_order_acquire) != head; ++spins) {
+-            if (spins < 4096) {
+-                __builtin_ia32_pause();
+-            } else {
+-                std::this_thread::yield();
+-            }
+-        }
++        WaitFor([&] { return consumed.load(std::memory_order_acquire) == head; });
+         const u64 waited = __rdtsc() - start;
+         drain_cycles += waited;
+         cycles_by_reason[slot] += waited;
+@@ -140,13 +185,7 @@
+         const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
+         ++drains_by_reason[slot];
+         const u64 start = __rdtsc();
+-        for (u32 spins = 0; !ReachedPacket(number); ++spins) {
+-            if (spins < 4096) {
+-                __builtin_ia32_pause();
+-            } else {
+-                std::this_thread::yield();
+-            }
+-        }
++        WaitFor([&] { return ReachedPacket(number); });
+         const u64 waited = __rdtsc() - start;
+         drain_cycles += waited;
+         cycles_by_reason[slot] += waited;
+diff -ruN a/tools/xeon_ab.sh b/tools/xeon_ab.sh
+--- a/tools/xeon_ab.sh	2026-10-16 21:38:19.899283738 +0000
++++ b/tools/xeon_ab.sh	2026-10-16 21:38:19.922503316 +0000
+@@ -2,7 +2,9 @@
+ # Tuning sweep for a 4-core / 8-thread CPU (Xeon E3-1245 v2): runs the game once per
+ # configuration with per-frame statistics, then prints a comparison against the baseline.
+ #
+-#   bash tools/xeon_ab.sh [SECONDS]      (default 70 s per run; the game is closed automatically)
++#   bash tools/xeon_ab.sh [SECONDS [PHASE...]]   (default 120 s per run; the game is closed automatically)
++#   PHASE: base gc spin prep2 rec1 tex gcpress drain50 drain100 faultwin uffd nomotion
++#   (base is always run first; no PHASE: all of them)
+ #
+ # Stand in the same spot (e.g. Hunter's Nightmare) for every run: do not move the camera
+ # between runs, or the numbers are not comparable. Results: out/ab_<name>_*.frames.csv/.log
+@@ -25,7 +27,10 @@
+ export BB_GAME_DIR
+ echo "Game: $BB_GAME_DIR"
+ 
+-declare -a names=(base gc spin prep2 rec1 tex gcpress)
++declare -a names=(base gc spin prep2 rec1 tex gcpress drain50 drain100 faultwin uffd nomotion)
++if (( $# > 1 )); then
++    names=(base "${@:2}")
++fi
+ declare -A cfg=(
+   [base]=""
+   [gc]="BB_GC_BUDGET_MB=5000"
+@@ -34,6 +39,14 @@
+   [rec1]="BB_GC_BUDGET_MB=5000 BB_VK_RECORD_THREADS=1"
+   [tex]="BB_GC_BUDGET_MB=5000 BB_TEXTURE_HELPER=1"
+   [gcpress]="BB_GC_BUDGET_MB=5000 BB_GC_PRESSURE_IDLE_SECONDS=20"
++  # stage A sleeps in 50/100 us steps instead of a sched_yield loop while it waits for stage B
++  [drain50]="BB_GC_BUDGET_MB=5000 BB_DRAIN_SLEEP_US=50"
++  [drain100]="BB_GC_BUDGET_MB=5000 BB_DRAIN_SLEEP_US=100"
++  # write-fault unprotect window 1 MiB (default 256 KiB), and userfaultfd write tracking
++  [faultwin]="BB_GC_BUDGET_MB=5000 BB_FAULT_WINDOW=1024"
++  [uffd]="BB_GC_BUDGET_MB=5000 BB_UFFD=1"
++  # no object motion vectors (about 0.3 us less per packet on stage B; TAA may ghost)
++  [nomotion]="BB_GC_BUDGET_MB=5000 BB_OBJECT_MOTION=0"
+ )
+ 
+ for name in "${names[@]}"; do

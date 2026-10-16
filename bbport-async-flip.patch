@@ -1,0 +1,22 @@
+--- a/gpu/shadps4/video_core/amdgpu/liverpool.cpp	2026-10-16 22:47:32.947699976 +0000
++++ b/gpu/shadps4/video_core/amdgpu/liverpool.cpp	2026-10-16 22:47:33.028063010 +0000
+@@ -597,6 +597,19 @@
+ }
+ 
+ void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
++    // bbport: BB_ASYNC_FLIP=1 (default off): stage B does not wait for the deferred fences
++    // (~2.5 ms a frame): the flip interrupt is queued behind them on the recording thread, which
++    // runs the signals in order, so it cannot overtake an earlier fence.
++    static const bool async_flip = [] {
++        const char* env = std::getenv("BB_ASYNC_FLIP");
++        return env && env[0] == '1';
++    }();
++    if (async_flip && Vulkan::DrawPipe::OnStageB() &&
++        !BbToggle::Disabled(BbToggle::RecorderFences)) {
++        rasterizer.SignalAfterHostCopies(
++            [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip); });
++        return;
++    }
+     rasterizer.WaitDeferredSignals();
+     Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
+ }

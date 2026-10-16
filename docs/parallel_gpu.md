@@ -576,3 +576,17 @@ now reads guest memory for the constant ring, is not treated as a GPU-side threa
 (`IsGpuSideThreadId` accepts only stage B). Next: a run with `BB_WRITE_LOG=1` that crashes
 prints which logged write landed near the corrupted block; bisect the pipeline toggles
 (38 tasks, 39 pending fence waits, 41 recorder fences, 42 memory writes, 36 constant ring).
+
+## Stage A's wait for stage B on a 4 core / 8 thread CPU (Xeon E3-1245 v2)
+
+`Frame stats` there: stage B busy 93-95%, stage A waiting 50-55% of its time at the one drain per
+frame (`OnSubmit`), 14.9-15.9 us/draw on the GPU thread (6.5-7.7 on a 16 thread CPU). perf of
+stage A: ~19% of its samples are the `sched_yield` loop of `DrawPipe::Drain`. The texture helper
+(`BB_TEXTURE_HELPER=1`) binds ~95% of the textures in parallel and changes nothing: GPU thread
+time per frame 13.45 ms without, 13.70 ms with.
+
+`BB_DRAIN_SLEEP_US=N` (default 0 = as before): once a wait for stage B has lasted
+`BB_DRAIN_YIELD_US` (20 us) stage A sleeps N us at a time instead of yielding. Stage B is not
+touched. Stand-alone test of the loop (7 ms wait): waiter CPU 101% -> 43% (N=30), 19% (N=100);
+the waiter resumes 30-46 us after the release. Not yet measured in game: A/B with
+`tools/xeon_ab.sh 120 drain50 drain100` (compare us/draw and FPS against `gc`).

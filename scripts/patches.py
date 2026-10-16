@@ -36,6 +36,8 @@ EFFECTS={
     'effect_game_aa':('Disable AA',None),
     'effect_dynamic_shadows':('Disable Dynamic Light Shadows (perf increase)',None),
     'effect_ssr':(None,'Enable Screen Space Reflections (READ NOTE)'),
+    'perf_patch':(None,'Performance Patch (perf increase)'),
+    'spin_pause':(None,'Spin Loop Pause (perf)'),
     'skip_intro':(None,'Skip Intro'),
     'debug_camera':(None,'Restore Debug Camera'),
     'debug_menu':(None,'Restore Debug Menu (READ NOTES)'),

@@ -1,25 +1,30 @@
-top - 17:00:41 up 11:40,  1 user,  load average: 2.21, 1.88, 2.79
-Threads: 94 total, 9 running, 85 sleep, 0 d-sleep, 0 stopped, 0 zombie
-%Cpu(s): 63.5 us, 11.8 sy,  0.0 ni, 22.2 id,  0.5 wa,  1.5 hi,  0.5 si,  0.0 st 
-MiB Mem :  15926.1 total,    557.9 free,  10604.3 used,   7792.7 buff/cache     
-MiB Swap:  15926.0 total,  15922.4 free,      3.6 used.   5321.9 avail Mem 
+top - 20:43:56 up 15:23,  1 user,  load average: 6.19, 3.06, 2.20
+Threads: 94 total, 8 running, 86 sleep, 0 d-sleep, 0 stopped, 0 zombie
+%Cpu(s): 53.9 us, 14.0 sy,  0.0 ni, 29.2 id,  1.1 wa,  1.7 hi,  0.0 si,  0.0 st 
+MiB Mem :  15926.1 total,   2565.9 free,   8218.1 used,   8266.5 buff/cache     
+MiB Swap:  15926.0 total,  14874.6 free,   1051.4 used.   7708.0 avail Mem 
 
     PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-  35005 haendel   20   0   13.2g   5.1g   4.5g R  88.1  32.6   0:07.13 bb:Draw+
-  34983 haendel   20   0   13.2g   5.1g   4.5g R  83.2  32.6   0:08.32 shadPS4+
-  34815 haendel   20   0   13.2g   5.1g   4.5g R  78.3  32.6   0:13.73 bb-probe
-  34994 haendel   20   0   13.2g   5.1g   4.5g S  29.4  32.6   0:02.72 bb:VkRe+
-  34995 haendel   20   0   13.2g   5.1g   4.5g R  29.4  32.6   0:01.78 bb:VkRe+
-  35033 haendel   20   0   13.2g   5.1g   4.5g S  24.5  32.6   0:01.22 GXWorke+
-  35034 haendel   20   0   13.2g   5.1g   4.5g S  19.6  32.6   0:01.25 GXWorke+
-  35035 haendel   20   0   13.2g   5.1g   4.5g S  19.6  32.6   0:01.25 GXWorke+
-  35036 haendel   20   0   13.2g   5.1g   4.5g S  19.6  32.6   0:01.24 GXWorke+
-  35000 haendel   20   0   13.2g   5.1g   4.5g S  14.7  32.6   0:00.90 bb:Draw+
-  35031 haendel   20   0   13.2g   5.1g   4.5g S  14.7  32.6   0:02.36 GXRende+
-  35032 haendel   20   0   13.2g   5.1g   4.5g S  14.7  32.6   0:01.24 GXWorke+
-  35001 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.80 bb:Draw+
-  35002 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.77 bb:Draw+
-  35003 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.81 bb:Draw+
-  35004 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.81 bb:Draw+
-  35028 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:01.14 FMOD mi+
-  35044 haendel   20   0   13.2g   5.1g   4.5g R   9.8  32.6   0:00.44 HavokWo+
+  62439 haendel   20   0   13.1g   4.8g   4.2g R  92.8  31.2   1:16.78 shadPS4+
+  62460 haendel   20   0   13.1g   4.8g   4.2g S  78.1  31.2   1:03.59 bb:Draw+
+  62281 haendel   20   0   13.1g   4.8g   4.2g R  58.6  31.2   0:52.56 bb-probe
+  62449 haendel   20   0   13.1g   4.8g   4.2g S  29.3  31.2   0:23.40 bb:VkRe+
+  62450 haendel   20   0   13.1g   4.8g   4.2g S  19.5  31.2   0:19.90 bb:VkRe+
+  62457 haendel   20   0   13.1g   4.8g   4.2g S  19.5  31.2   0:11.39 bb:Draw+
+  62486 haendel   20   0   13.1g   4.8g   4.2g R  19.5  31.2   0:10.43 GXWorke+
+  62488 haendel   20   0   13.1g   4.8g   4.2g R  19.5  31.2   0:10.46 GXWorke+
+  62458 haendel   20   0   13.1g   4.8g   4.2g S  14.7  31.2   0:11.51 bb:Draw+
+  62459 haendel   20   0   13.1g   4.8g   4.2g S  14.7  31.2   0:11.43 bb:Draw+
+  62485 haendel   20   0   13.1g   4.8g   4.2g S  14.7  31.2   0:16.55 GXRende+
+  62487 haendel   20   0   13.1g   4.8g   4.2g R  14.7  31.2   0:10.71 GXWorke+
+  62490 haendel   20   0   13.1g   4.8g   4.2g R  14.7  31.2   0:10.90 GXWorke+
+  62455 haendel   20   0   13.1g   4.8g   4.2g S   9.8  31.2   0:07.12 bb:Draw+
+  62456 haendel   20   0   13.1g   4.8g   4.2g S   9.8  31.2   0:11.33 bb:Draw+
+  62489 haendel   20   0   13.1g   4.8g   4.2g R   9.8  31.2   0:10.86 GXWorke+
+  62473 haendel   20   0   13.1g   4.8g   4.2g S   4.9  31.2   0:02.03 EzWorkP+
+  62482 haendel   20   0   13.1g   4.8g   4.2g R   4.9  31.2   0:06.12 FMOD mi+
+  62484 haendel   20   0   13.1g   4.8g   4.2g S   4.9  31.2   0:01.05 FMOD st+
+  62497 haendel   20   0   13.1g   4.8g   4.2g S   4.9  31.2   0:03.56 HavokWo+
+  62498 haendel   20   0   13.1g   4.8g   4.2g S   4.9  31.2   0:04.21 HavokWo+
+  62499 haendel   20   0   13.1g   4.8g   4.2g S   4.9  31.2   0:04.66 HavokWo+
+  62500 haendel   20   0   13.1g   4.8g   4.2g S   4.9  31.2   0:04.85 HavokWo+

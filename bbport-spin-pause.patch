@@ -1,0 +1,26 @@
+--- a/patches/Bloodborne.xml	2026-10-16 23:30:47.614198082 +0000
++++ b/patches/Bloodborne.xml	2026-10-16 23:30:47.702597978 +0000
+@@ -258,6 +258,12 @@
+             <Line Type="bytes" Address="0x026C2538" Value="00"/>
+         </PatchList>
+     </Metadata>
++    <Metadata Title="Bloodborne" Name="Spin Loop Pause (perf)" Note="Adds a pause instruction to a busy-wait loop the game's main thread spends about 2.6% of all samples in (image offset 0x21b8890): the waiting thread stops stealing execution resources from its hyperthread sibling. Does not change what the game does." Author="bbport" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
++        <PatchList>
++            <Line Type="bytes" Address="0x025B888A" Value="F3900F1F4000"/>
++            <Line Type="bytes" Address="0x025B88A1" Value="E8"/>
++        </PatchList>
++    </Metadata>
+     <Metadata Title="Bloodborne" Name="Disable Chromatic Aberration" Author="illusion" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
+         <PatchList>
+             <Line Type="bytes" Address="0x0269faa8" Value="c783ac000000000000009090"/>
+--- a/scripts/patches.py	2026-10-16 23:30:47.617053865 +0000
++++ b/scripts/patches.py	2026-10-16 23:30:47.703604968 +0000
+@@ -39,6 +39,8 @@
+     # bbport.ini perf_patch=1: the community Performance Patch (lower light grid draw calls and
+     # other debug parameters); off by default, it may change some visuals.
+     'perf_patch':(None,'Performance Patch (perf increase)'),
++    # bbport.ini spin_pause=1: a pause in the game's busy-wait loop at image offset 0x21b8890.
++    'spin_pause':(None,'Spin Loop Pause (perf)'),
+     'skip_intro':(None,'Skip Intro'),
+     'debug_camera':(None,'Restore Debug Camera'),
+     'debug_menu':(None,'Restore Debug Menu (READ NOTES)'),

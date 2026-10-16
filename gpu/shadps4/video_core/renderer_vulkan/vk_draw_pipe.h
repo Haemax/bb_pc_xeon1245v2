@@ -21,6 +21,8 @@
 #include <cstring>
 #include <memory>
 #include <thread>
+#include <time.h>
+#include <sys/prctl.h>
 #include <x86intrin.h>
 
 #include "common/assert.h"
@@ -102,6 +104,55 @@ public:
     std::array<u64, NumReasons> drains_by_reason{};
     std::array<u64, NumReasons> cycles_by_reason{};
 
+    /// Stage A: waits for stage B (Drain, WaitForPacket) until `done()` holds. 4096 pauses (a
+    /// packet or two), then yields. Stage A waits ~50% of its time here on a 4 core / 8 thread
+    /// CPU (stage B is the slower stage), and a sched_yield loop keeps its hardware thread, and the
+    /// core it shares with another thread, busy for all of it. BB_DRAIN_SLEEP_US=N (default 0:
+    /// yield until done, as before) sleeps N us at a time once the wait has lasted
+    /// BB_DRAIN_YIELD_US (default 20) us; stage B is not involved, so a missed wake-up cannot
+    /// happen, and stage A resumes at most about N us after stage B ran dry.
+    template <typename Done>
+    static void WaitFor(Done&& done) {
+        static const u32 sleep_us = EnvMicros("BB_DRAIN_SLEEP_US", 0);
+        static const u32 yield_us = EnvMicros("BB_DRAIN_YIELD_US", 20);
+        std::chrono::steady_clock::time_point sleep_from{};
+        for (u32 spins = 0; !done(); ++spins) {
+            if (spins < 4096) {
+                __builtin_ia32_pause();
+                continue;
+            }
+            if (sleep_us == 0) {
+                std::this_thread::yield();
+                continue;
+            }
+            if (spins == 4096) {
+                sleep_from = std::chrono::steady_clock::now() + std::chrono::microseconds(yield_us);
+            }
+            if (std::chrono::steady_clock::now() < sleep_from) {
+                std::this_thread::yield();
+                continue;
+            }
+            ShortSleep(sleep_us);
+        }
+    }
+
+    [[nodiscard]] static u32 EnvMicros(const char* name, u32 fallback) {
+        const char* env = std::getenv(name);
+        return env && env[0] ? static_cast<u32>(std::max(0, std::atoi(env))) : fallback;
+    }
+
+    /// Sleeps `us` microseconds. The default timer slack (50 us) would make a 30 us sleep last
+    /// ~80, so the calling thread (stage A) gets a 1 us slack the first time.
+    static void ShortSleep(u32 us) {
+        static thread_local bool slack_set = false;
+        if (!slack_set) {
+            prctl(PR_SET_TIMERSLACK, 1000UL, 0UL, 0UL, 0UL);
+            slack_set = true;
+        }
+        timespec ts{0, static_cast<long>(us) * 1000};
+        nanosleep(&ts, nullptr);
+    }
+
     /// Stage A: waits until stage B has run every committed packet.
     void Drain(u32 reason = ReasonRasterizer) {
         if (consumed.load(std::memory_order_acquire) == head) {
@@ -111,13 +162,7 @@ public:
         const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
         ++drains_by_reason[slot];
         const u64 start = __rdtsc();
-        for (u32 spins = 0; consumed.load(std::memory_order_acquire) != head; ++spins) {
-            if (spins < 4096) {
-                __builtin_ia32_pause();
-            } else {
-                std::this_thread::yield();
-            }
-        }
+        WaitFor([&] { return consumed.load(std::memory_order_acquire) == head; });
         const u64 waited = __rdtsc() - start;
         drain_cycles += waited;
         cycles_by_reason[slot] += waited;
@@ -140,13 +185,7 @@ public:
         const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
         ++drains_by_reason[slot];
         const u64 start = __rdtsc();
-        for (u32 spins = 0; !ReachedPacket(number); ++spins) {
-            if (spins < 4096) {
-                __builtin_ia32_pause();
-            } else {
-                std::this_thread::yield();
-            }
-        }
+        WaitFor([&] { return ReachedPacket(number); });
         const u64 waited = __rdtsc() - start;
         drain_cycles += waited;
         cycles_by_reason[slot] += waited;

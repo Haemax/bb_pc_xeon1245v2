@@ -45,8 +45,6 @@
             <Line Type="bytes" Address="0x0553B198" Value="01"/>
             <Line Type="bytes" Address="0x058B0870" Value="01"/>
             <Line Type="bytes" Address="0x0553AC8D" Value="01"/>
-            <Line Type="bytes" Address="0x0603AD1A" Value="00"/>
-            <Line Type="bytes" Address="0x0603AC8D" Value="01"/>
             <Line Type="bytes" Address="0x0553ad1c" Value="00"/>
             <Line Type="bytes" Address="0x0553ad1a" Value="00"/>
             <Line Type="bytes" Address="0x05527B8E" Value="00"/>
@@ -256,6 +254,12 @@
     <Metadata Title="Bloodborne" Name="Disable Dynamic Light Shadows (perf increase)" Note="Disable Dynamic Light Shadow, stops a ton of heavy draw calls, performance increase." Author="Kyo" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
         <PatchList>
             <Line Type="bytes" Address="0x026C2538" Value="00"/>
+        </PatchList>
+    </Metadata>
+    <Metadata Title="Bloodborne" Name="Spin Loop Pause (perf)" Note="Adds a pause instruction to a busy-wait loop the game's main thread spends about 2.6% of all samples in (image offset 0x21b8890): the waiting thread stops stealing execution resources from its hyperthread sibling. Does not change what the game does." Author="bbport" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="bytes" Address="0x025B888A" Value="F3900F1F4000"/>
+            <Line Type="bytes" Address="0x025B88A1" Value="E8"/>
         </PatchList>
     </Metadata>
     <Metadata Title="Bloodborne" Name="Disable Chromatic Aberration" Author="illusion" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
