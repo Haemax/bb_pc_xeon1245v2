@@ -48,3 +48,11 @@ logs/
 pgo/
 *.log
 *.bin
+out/
+user/
+logs/
+pgo/
+*.log
+*.bin
+*.frames.csv
+*.readbacks.csv

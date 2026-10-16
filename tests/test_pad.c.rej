@@ -1,0 +1,74 @@
+--- tests/test_pad.c
++++ tests/test_pad.c
+@@ -119,11 +119,70 @@ int main(void) {
+         for (int i=0;i<20;++i) apply_mouse_look(&m,0,0,1+(rate+61+i)*step,1);
+         assert(m.right_x==128);
+     }
++    /* Mouse look settings: one sensitivity for both axes, one per axis (later lines win), inversion,
++     * smoothing; the environment overrides the file; out-of-range values are ignored. */
++    {
++        char mouse_config[]="/tmp/bbport-mouse-config-XXXXXX";
++        const int mouse_fd=mkstemp(mouse_config);
++        assert(mouse_fd>=0);
++        const char text[]="mouse_sensitivity=2\nmouse_sensitivity_y=0.5\nmouse_invert_x=1\nmouse_smoothing=0.5\n"
++                          "mouse_sensitivity_x=999\n";
++        assert(write(mouse_fd,text,sizeof(text)-1)==(ssize_t)(sizeof(text)-1));
++        close(mouse_fd);
++        setenv("BB_CONFIG",mouse_config,1);
++        load_bindings();
++        assert(mouse_sensitivity_x==2.0f && mouse_sensitivity_y==0.5f && mouse_invert_x && !mouse_invert_y);
++        assert(mouse_smoothing==0.5f);
++        setenv("BB_MOUSE_SENSITIVITY_X","3",1);
++        setenv("BB_MOUSE_SMOOTHING","2",1); /* past 0.95: ignored */
++        setenv("BB_MOUSE_INVERT_Y","1",1);
++        load_bindings();
++        assert(mouse_sensitivity_x==3.0f && mouse_sensitivity_y==0.5f && mouse_smoothing==0.5f && mouse_invert_y);
++        unsetenv("BB_MOUSE_SENSITIVITY_X"); unsetenv("BB_MOUSE_SMOOTHING"); unsetenv("BB_MOUSE_INVERT_Y");
++        unlink(mouse_config);
++        unsetenv("BB_CONFIG");
++        load_bindings(); /* no file: the defaults */
++        assert(mouse_sensitivity_x==1.0f && mouse_sensitivity_y==1.0f && !mouse_invert_x && !mouse_invert_y &&
++               mouse_smoothing==0.0f);
++
++        /* Inversion of X, and independent speeds per axis. */
++        PadData m; memset(&m,0,sizeof m);
++        mouse_invert_x=1; mouse_sensitivity_y=0.5f;
++        look_x=look_y=look_smooth_x=look_smooth_y=0; look_last_us=1;
++        m.right_x=m.right_y=128;
++        apply_mouse_look(&m,8,8,1+16667,1);
++        assert(m.right_x<128 && m.right_y>128);
++        const int x_turn=128-m.right_x, y_turn=m.right_y-128;
++        assert(x_turn>y_turn);
++        mouse_invert_x=0; mouse_sensitivity_y=1.0f;
++
++        /* Smoothing: a single burst of motion spreads over a few frames, the total stays, and the
++         * spread lasts the same time at 60 and at 240 samples a second. */
++        mouse_smoothing=0.8f;
++        double ratio[2]; int index=0;
++        for (int rate=60;rate<=240;rate*=4,++index) {
++            const uint64_t step=1000000/(uint64_t)rate;
++            look_x=look_y=look_smooth_x=look_smooth_y=0; look_last_us=1;
++            double total=0, first=0, at_50ms=0;
++            for (int i=1;i<=rate;++i) { /* one second: the burst in the first sample */
++                m.right_x=m.right_y=128;
++                apply_mouse_look(&m,i==1 ? 100.0 : 0.0,0,1+(uint64_t)i*step,1);
++                total+=look_smooth_x;
++                if (i==1) first=look_smooth_x;
++                if ((uint64_t)(i-1)*step>=50000 && at_50ms==0) at_50ms=look_smooth_x;
++            }
++            assert(first>0 && first<30 && total>99.0 && total<101.0);
++            ratio[index]=at_50ms/first;
++        }
++        assert(ratio[0]-ratio[1]<0.08 && ratio[1]-ratio[0]<0.08);
++        mouse_smoothing=0.0f;
++        look_x=look_y=look_smooth_x=look_smooth_y=0;
++    }
+     mouse_wheel_step(1000000,0,2);
+     assert(wheel_phase[1]==1 && mouse_key_down(MOUSE_WHEEL_DOWN));
+     mouse_wheel_step(1070000,0,0);
+     assert(!mouse_key_down(MOUSE_WHEEL_DOWN));
+     mouse_wheel_step(1140000,0,0);
+     assert(mouse_key_down(MOUSE_WHEEL_DOWN) && wheel_pending[1]==0);
+-    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls, mouse");
++    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls, mouse, mouse look settings");
+ }

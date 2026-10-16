@@ -1,0 +1,113 @@
+--- src/runtime_pad.c
++++ src/runtime_pad.c
+@@ -355,16 +355,39 @@ static int key_from_name(const char *name) {
+     return s==SDL_SCANCODE_UNKNOWN ? -1 : (int)s;
+ }
+ /* Mouse look (bbport.ini): mouse_look=0 leaves the mouse alone; mouse_sensitivity (default 1:
+- * ~1000 pixels/s turn the camera at full speed), mouse_invert_y=1. */
+-static int mouse_look=1, mouse_invert_y;
+-static float mouse_sensitivity=1.0f;
++ * ~1000 pixels/s turn the camera at full speed) sets both axes, mouse_sensitivity_x / _y one axis
++ * (later lines win); mouse_invert_x=1, mouse_invert_y=1; mouse_smoothing=0..0.95 (default 0: raw)
++ * filters the motion over a few frames (the strength is per 1/60 s, so it feels the same at any
++ * frame rate). The same names in capitals with BB_ in front (BB_MOUSE_SENSITIVITY_X, ...) in the
++ * environment override the file. */
++static int mouse_look=1, mouse_invert_x, mouse_invert_y;
++static float mouse_sensitivity_x=1.0f, mouse_sensitivity_y=1.0f, mouse_smoothing;
++static float mouse_float_in_range(const char *text, float low, float high, float fallback) {
++    char *end=NULL;
++    const float v=strtof(text,&end);
++    return end!=text && v>=low && v<=high ? v : fallback;
++}
++static void mouse_env_overrides(void) {
++    const char *v;
++    if ((v=getenv("BB_MOUSE_SENSITIVITY")) && *v)
++        mouse_sensitivity_x=mouse_sensitivity_y=mouse_float_in_range(v,0.05f,20.0f,mouse_sensitivity_x);
++    if ((v=getenv("BB_MOUSE_SENSITIVITY_X")) && *v)
++        mouse_sensitivity_x=mouse_float_in_range(v,0.05f,20.0f,mouse_sensitivity_x);
++    if ((v=getenv("BB_MOUSE_SENSITIVITY_Y")) && *v)
++        mouse_sensitivity_y=mouse_float_in_range(v,0.05f,20.0f,mouse_sensitivity_y);
++    if ((v=getenv("BB_MOUSE_SMOOTHING")) && *v)
++        mouse_smoothing=mouse_float_in_range(v,0.0f,0.95f,mouse_smoothing);
++    if ((v=getenv("BB_MOUSE_INVERT_X")) && *v) mouse_invert_x=atoi(v)!=0;
++    if ((v=getenv("BB_MOUSE_INVERT_Y")) && *v) mouse_invert_y=atoi(v)!=0;
++}
+ /* key.<input>= / pad.<input>= lines of the settings file. */
+ static void load_bindings(void) {
+     bind_defaults();
+-    mouse_look=1; mouse_invert_y=0; mouse_sensitivity=1.0f;
++    mouse_look=1; mouse_invert_x=mouse_invert_y=0; mouse_sensitivity_x=mouse_sensitivity_y=1.0f;
++    mouse_smoothing=0.0f;
+     const char *path=getenv("BB_CONFIG");
+     FILE *f=path ? fopen(path,"r") : NULL;
+-    if (!f) return;
++    if (!f) { mouse_env_overrides(); return; }
+     char line[512];
+     while (fgets(line,sizeof line,f)) {
+         const int keyboard=!strncmp(line,"key.",4), pad=!strncmp(line,"pad.",4);
+@@ -372,11 +395,17 @@ static void load_bindings(void) {
+         if (eq && !keyboard && !pad) {
+             const char *value=eq+1;
+             if (!strncmp(line,"mouse_look=",11)) mouse_look=atoi(value)!=0;
++            else if (!strncmp(line,"mouse_invert_x=",15)) mouse_invert_x=atoi(value)!=0;
+             else if (!strncmp(line,"mouse_invert_y=",15)) mouse_invert_y=atoi(value)!=0;
+-            else if (!strncmp(line,"mouse_sensitivity=",18)) {
+-                const float v=strtof(value,NULL);
+-                if (v>=0.05f && v<=20.0f) mouse_sensitivity=v;
+-            }
++            else if (!strncmp(line,"mouse_sensitivity=",18))
++                mouse_sensitivity_x=mouse_sensitivity_y=
++                    mouse_float_in_range(value,0.05f,20.0f,mouse_sensitivity_x);
++            else if (!strncmp(line,"mouse_sensitivity_x=",20))
++                mouse_sensitivity_x=mouse_float_in_range(value,0.05f,20.0f,mouse_sensitivity_x);
++            else if (!strncmp(line,"mouse_sensitivity_y=",20))
++                mouse_sensitivity_y=mouse_float_in_range(value,0.05f,20.0f,mouse_sensitivity_y);
++            else if (!strncmp(line,"mouse_smoothing=",16))
++                mouse_smoothing=mouse_float_in_range(value,0.0f,0.95f,mouse_smoothing);
+             continue;
+         }
+         if ((!keyboard && !pad) || !eq) continue;
+@@ -402,6 +431,7 @@ static void load_bindings(void) {
+         }
+     }
+     fclose(f);
++    mouse_env_overrides();
+ }
+ /* The mouse while the window holds it: buttons, and the wheel as short presses (one per notch,
+  * each held and released for a few frames so the game sees it). */
+@@ -467,7 +497,7 @@ static void apply_keyboard(PadData *d, const bool *k) {
+  * small deflections, so a moving mouse starts past them (BB_MOUSE_DEADZONE, default 16 of 127):
+  * slow aiming still turns the camera. While the mouse moves it replaces the right stick. */
+ #define LOOK_TAU_US 60000.0f
+-static float look_x, look_y;
++static float look_x, look_y, look_smooth_x, look_smooth_y;
+ static uint64_t look_last_us;
+ static uint8_t look_axis(float value, uint8_t stick, int deadzone) {
+     if (value>-0.5f && value<0.5f) return stick;
+@@ -479,7 +509,7 @@ static uint8_t look_axis(float value, uint8_t stick, int deadzone) {
+ static void apply_mouse_look(PadData *d, double dx, double dy, uint64_t now, int captured) {
+     float dt=look_last_us && now>look_last_us ? (float)(now-look_last_us) : 0.0f;
+     look_last_us=now;
+-    if (!captured) { look_x=look_y=0; return; }
++    if (!captured) { look_x=look_y=look_smooth_x=look_smooth_y=0; return; }
+     if (dt>LOOK_TAU_US) dt=LOOK_TAU_US;
+     static int deadzone=-1;
+     if (deadzone<0) {
+@@ -487,9 +517,14 @@ static void apply_mouse_look(PadData *d, double dx, double dy, uint64_t now, int
+         deadzone=env && *env ? atoi(env) : 16;
+         if (deadzone<0 || deadzone>100) deadzone=16;
+     }
+-    const float gain=127.0f/(1000.0f*LOOK_TAU_US/1e6f)*mouse_sensitivity, decay=1.0f-dt/LOOK_TAU_US;
+-    look_x=look_x*decay+(float)dx*gain;
+-    look_y=look_y*decay+(float)(mouse_invert_y ? -dy : dy)*gain;
++    const float base_gain=127.0f/(1000.0f*LOOK_TAU_US/1e6f), decay=1.0f-dt/LOOK_TAU_US;
++    /* mouse_smoothing: an exponential filter on the motion, its strength per 1/60 s (0: raw). The
++     * filter keeps the total motion, so the camera still turns as far, only a little later. */
++    const float keep=mouse_smoothing>0.0f && dt>0.0f ? SDL_powf(mouse_smoothing,dt/16667.0f) : 0.0f;
++    look_smooth_x=look_smooth_x*keep+(float)(mouse_invert_x ? -dx : dx)*(1.0f-keep);
++    look_smooth_y=look_smooth_y*keep+(float)(mouse_invert_y ? -dy : dy)*(1.0f-keep);
++    look_x=look_x*decay+look_smooth_x*base_gain*mouse_sensitivity_x;
++    look_y=look_y*decay+look_smooth_y*base_gain*mouse_sensitivity_y;
+     look_x=look_x<-127 ? -127 : look_x>127 ? 127 : look_x;
+     look_y=look_y<-127 ? -127 : look_y>127 ? 127 : look_y;
+     d->right_x=look_axis(look_x,d->right_x,deadzone);

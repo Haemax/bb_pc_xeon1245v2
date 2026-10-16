@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 121K of event 'cpu/cycles/P'
+# Event count (approx.): 360147703941
+#
+# Overhead  Command          Symbol                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+# ........  ...............  .................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+#
+     1.43%  bb-probe         [.] 0x00000008021b88a0
+     1.36%  shadPS4:GpuComm  [k] 0xffffffff824001c1
+     1.22%  bb-probe         [.] 0x00000008021b8890
+     1.14%  shadPS4:GpuComm  [.] __memmove_sse2_unaligned_erms
+     0.87%  bb:VkRecorder    [.] __memmove_sse2_unaligned_erms
+     0.80%  bb:VkRecorder    [.] Vulkan::Scheduler::RecorderThread(std::stop_token, unsigned int)
+     0.77%  shadPS4:GpuComm  [.] Vulkan::Rasterizer::PostDraw(Vulkan::Pipeline const*, Vulkan::PreparedDraw const*, bool, unsigned int, AmdGpu::ComputeProgram const*, Vulkan::Rasterizer::IndirectDraw const*)
+     0.76%  shadPS4:GpuComm  [.] AmdGpu::Liverpool::ProcessGraphics(AmdGpu::Liverpool::_ZN6AmdGpu9Liverpool15ProcessGraphicsESt4spanIKjLm18446744073709551615EES3_mSt10shared_ptrINS0_13SubmittedCopyEE.Frame*) [clone .actor] [clone .lto_priv.0]
+     0.76%  bb:VkRecorder1   [.] Vulkan::Scheduler::RecorderThread(std::stop_token, unsigned int)
+     0.61%  bb:VkRecorder1   [.] __memmove_sse2_unaligned_erms
+     0.57%  shadPS4:GpuComm  [.] Vulkan::Rasterizer::PendingWriteOverlaps(unsigned long, unsigned long)
+     0.54%  shadPS4:GpuComm  [k] 0xffffffff824000a0
+     0.50%  shadPS4:GpuComm  [k] 0xffffffff824001b8
+     0.49%  bb:DrawRec       [.] Vulkan::Rasterizer::RunDrawPacket(void*, unsigned char const*, unsigned int)
+     0.49%  shadPS4:GpuComm  [.] AmdGpu::Liverpool::ApplyGraphicsRegisterPacket(AmdGpu::Regs&, AmdGpu::PM4Header const*, unsigned long&, AmdGpu::RegDirty*)
+     0.48%  bb:DrawRec       [.] __memmove_sse2_unaligned_erms
+     0.47%  bb:DrawRec       [.] Vulkan::Rasterizer::BindTextures(Shader::Info const&, Vulkan::PreparedStage const*, Shader::Backend::Bindings&, unsigned int&, bool&, bool)
+     0.41%  bb:DrawScan      [.] AmdGpu::Liverpool::ApplyGraphicsRegisterPacket(AmdGpu::Regs&, AmdGpu::PM4Header const*, unsigned long&, AmdGpu::RegDirty*)
+     0.40%  bb:DrawRec       [.] Vulkan::Rasterizer::BindBuffers(Shader::Info const&, Vulkan::PreparedStage const*, Shader::Backend::Bindings&, Shader::PushData&, unsigned int&)
+     0.39%  bb:DrawScan      [.] Vulkan::DrawPreparation::ScannerLoop(std::stop_token)
+     0.38%  shadPS4:GpuComm  [.] Vulkan::Rasterizer::NotePendingGpuWrite(unsigned long, unsigned long)
+     0.38%  shadPS4:GpuComm  [.] Vulkan::Rasterizer::CollectRingBindings(Shader::Info const&, Vulkan::PreparedDraw const*, boost::container::static_vector<Vulkan::Rasterizer::RingBinding, 40ul, void>&)
+     0.36%  bb:DrawRec       [.] Vulkan::Rasterizer::BindTexturesFromSet(Shader::Info const&, Vulkan::PreparedStage const*, unsigned int, bool&, Vulkan::Rasterizer::TextureSet*&)
+     0.36%  bb:DrawRec       [.] std::thread::_State_impl<std::thread::_Invoker<std::tuple<Vulkan::DrawPipe::DrawPipe(void (*)(void*, unsigned char const*, unsigned int), void*)::{lambda(std::stop_token)#1}, std::stop_token> > >::_M_run()
+     0.35%  bb:DrawRec       [.] Vulkan::Rasterizer::DrawRecord(Vulkan::GraphicsPipeline const*, Vulkan::PreparedDraw const*, bool, unsigned int)
+     0.34%  bb:DrawRec       [.] Vulkan::Rasterizer::ResolveVertexBuffers(Vulkan::GraphicsPipeline const*, Vulkan::PreparedDraw const*)
+     0.32%  bb:DrawRec       [.] Vulkan::Pipeline::BindResources(std::vector<vk::WriteDescriptorSet, std::allocator<vk::WriteDescriptorSet> >&, Shader::PushData const&, std::span<vk::DescriptorImageInfo const, 18446744073709551615ul>, std::span<vk::DescriptorBufferInfo const, 18446744073709551615ul>) const
+     0.32%  bb:DrawRec       [.] Vulkan::Rasterizer::BindResources(Vulkan::Pipeline const*)
+     0.31%  bb:DrawRec       [.] VideoCore::BufferCache::SynchronizeMemory(VideoCore::Buffer const*, unsigned long, unsigned int, bool, bool)
+     0.29%  bb:DrawRec       [.] VideoCore::BufferCache::ObtainBuffer(unsigned long, unsigned int, bool, bool)
+     0.29%  shadPS4:GpuComm  [.] Vulkan::Rasterizer::NotePendingRead(unsigned long, unsigned long)
+     0.29%  bb:DrawRec       [.] Vulkan::Rasterizer::PrepareRenderState(Vulkan::GraphicsPipeline const*)
+     0.26%  bb:DrawRec       [.] Vulkan::Rasterizer::BeginRendering(Vulkan::GraphicsPipeline const*)
+     0.25%  shadPS4:GpuComm  [.] Shader::StageSpecialization::StageSpecialization(Shader::Info const&, Shader::RuntimeInfo, Shader::Profile const&, Shader::Backend::Bindings)
+     0.25%  shadPS4:GpuComm  [.] AmdGpu::Liverpool::HashRegisterPacket(unsigned long, unsigned int const*, unsigned int)
+     0.25%  bb:DrawRec       [.] VideoCore::TextureCache::TouchImage(VideoCore::Image const&)
+     0.24%  bb:DrawRec       [.] VideoCore::Image::GetBarriers(boost::container::small_vector<vk::ImageMemoryBarrier2, 32ul, void, void>&, vk::ImageLayout, vk::Flags<vk::AccessFlagBits2>, vk::Flags<vk::PipelineStageFlagBits2>, std::optional<VideoCore::SubresourceRange>)
+     0.23%  GXRenderThread   [.] __memset_sse2_unaligned_erms
+     0.23%  bb:DrawScan      [.] AmdGpu::Liverpool::HashRegisterPacket(unsigned long, unsigned int const*, unsigned int)
+     0.22%  bb:DrawPrep0     [.] Vulkan::DrawPreparation::WorkerLoop(std::stop_token, unsigned int)
+     0.22%  bb:DrawPrep2     [.] Vulkan::DrawPreparation::WorkerLoop(std::stop_token, unsigned int)
+     0.22%  shadPS4:GpuComm  [.] Vulkan::PipelineCache::TryPreparedPipeline(Vulkan::PreparedDraw const&)
+     0.22%  bb:DrawRec       [.] Vulkan::Rasterizer::EmitVertexBuffers()
+     0.22%  shadPS4:GpuComm  [.] __memset_sse2_unaligned_erms
+     0.21%  bb:DrawPrep1     [.] Vulkan::DrawPreparation::WorkerLoop(std::stop_token, unsigned int)
+     0.21%  shadPS4:GpuComm  [.] Core::(anonymous namespace)::CachedMapped(unsigned long, unsigned long)
+     0.21%  bb:DrawRec       [.] Vulkan::Rasterizer::UpdateViewportScissorState() const
+     0.20%  shadPS4:GpuComm  [.] __memcmp_sse2
+     0.20%  bb:DrawRec       [.] VideoCore::BufferCache::EnsureResident(VideoCore::Buffer const*, unsigned long, unsigned long, bool)

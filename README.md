@@ -346,7 +346,13 @@ budget taken as at most N MiB: checks the behaviour of cards with little VRAM), 
 with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames),
 `BB_FSR411_VARIANT=int8|fp8|fp8emu` (FSR 4.1.1 variant; by default FP8 where the GPU has FP8
 matrices), `BB_READBACKS=0|1|2` (reads of GPU-written memory by the game: 1 by default, 2
-precise and slow, 0 off).
+precise and slow, 0 off), `BB_MOUSE_SENSITIVITY[_X|_Y]`, `BB_MOUSE_SMOOTHING` (0–0.95),
+`BB_MOUSE_INVERT_X|Y` (the same as the `mouse_*` lines of `bbport.ini`; the environment wins),
+`BB_AUDIO_SOFTCLIP=0` (no soft limiter on the audio output), `BB_AUDIO_PREFILL=N` (1–8 buffer
+periods of audio kept queued, 2 by default: more survives longer stalls of the audio thread),
+`BB_NCPU=N` (the core count the game reads, 7 by default).
+`python3 tools/frame_summary.py logs/<time>.frames.csv` summarizes a frame log (FPS, 1 % lows,
+stutter, GPU-bound or CPU-bound); `--compare` puts two runs side by side.
 More in [docs/](docs); recent changes: [docs/CHANGES_0.4.md](docs/CHANGES_0.4.md) (in Russian),
 [docs/CHANGES_2026-10-06.md](docs/CHANGES_2026-10-06.md).
 

@@ -1,0 +1,25 @@
+top - 17:00:41 up 11:40,  1 user,  load average: 2.21, 1.88, 2.79
+Threads: 94 total, 9 running, 85 sleep, 0 d-sleep, 0 stopped, 0 zombie
+%Cpu(s): 63.5 us, 11.8 sy,  0.0 ni, 22.2 id,  0.5 wa,  1.5 hi,  0.5 si,  0.0 st 
+MiB Mem :  15926.1 total,    557.9 free,  10604.3 used,   7792.7 buff/cache     
+MiB Swap:  15926.0 total,  15922.4 free,      3.6 used.   5321.9 avail Mem 
+
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+  35005 haendel   20   0   13.2g   5.1g   4.5g R  88.1  32.6   0:07.13 bb:Draw+
+  34983 haendel   20   0   13.2g   5.1g   4.5g R  83.2  32.6   0:08.32 shadPS4+
+  34815 haendel   20   0   13.2g   5.1g   4.5g R  78.3  32.6   0:13.73 bb-probe
+  34994 haendel   20   0   13.2g   5.1g   4.5g S  29.4  32.6   0:02.72 bb:VkRe+
+  34995 haendel   20   0   13.2g   5.1g   4.5g R  29.4  32.6   0:01.78 bb:VkRe+
+  35033 haendel   20   0   13.2g   5.1g   4.5g S  24.5  32.6   0:01.22 GXWorke+
+  35034 haendel   20   0   13.2g   5.1g   4.5g S  19.6  32.6   0:01.25 GXWorke+
+  35035 haendel   20   0   13.2g   5.1g   4.5g S  19.6  32.6   0:01.25 GXWorke+
+  35036 haendel   20   0   13.2g   5.1g   4.5g S  19.6  32.6   0:01.24 GXWorke+
+  35000 haendel   20   0   13.2g   5.1g   4.5g S  14.7  32.6   0:00.90 bb:Draw+
+  35031 haendel   20   0   13.2g   5.1g   4.5g S  14.7  32.6   0:02.36 GXRende+
+  35032 haendel   20   0   13.2g   5.1g   4.5g S  14.7  32.6   0:01.24 GXWorke+
+  35001 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.80 bb:Draw+
+  35002 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.77 bb:Draw+
+  35003 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.81 bb:Draw+
+  35004 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:00.81 bb:Draw+
+  35028 haendel   20   0   13.2g   5.1g   4.5g S   9.8  32.6   0:01.14 FMOD mi+
+  35044 haendel   20   0   13.2g   5.1g   4.5g R   9.8  32.6   0:00.44 HavokWo+

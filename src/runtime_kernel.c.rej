@@ -1,0 +1,19 @@
+--- src/runtime_kernel.c
++++ src/runtime_kernel.c
+@@ -217,7 +217,15 @@ static ABI int32_t guest_sysctl(const int32_t *name,uint32_t namelen,void *old,u
+     }
+     if (name[0]==6 && (name[1]==7 || name[1]==3)) { /* hw.pagesize / hw.ncpu */
+         if (!oldlen) return fail_posix(EINVAL);
+-        int32_t value=name[1]==7 ? PAGE : 7;
++        /* hw.ncpu: the PS4's 7 game cores unless BB_NCPU (1..64) says otherwise: the game sizes
++         * its worker pools from it, so a 4-core PC may do better with a smaller number. */
++        static int32_t ncpu=-1;
++        if (ncpu<0) {
++            const char *env=getenv("BB_NCPU");
++            ncpu=env && *env ? atoi(env) : 7;
++            if (ncpu<1 || ncpu>64) ncpu=7;
++        }
++        int32_t value=name[1]==7 ? PAGE : ncpu;
+         if (old) { if (*oldlen<4) return fail_posix(ENOMEM); memcpy(old,&value,4); }
+         *oldlen=4; return 0;
+     }

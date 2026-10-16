@@ -1,0 +1,571 @@
+diff --git a/README.md b/README.md
+index b7004d7..c6e14db 100644
+--- a/README.md
++++ b/README.md
+@@ -346,7 +346,13 @@ budget taken as at most N MiB: checks the behaviour of cards with little VRAM),
+ with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames),
+ `BB_FSR411_VARIANT=int8|fp8|fp8emu` (FSR 4.1.1 variant; by default FP8 where the GPU has FP8
+ matrices), `BB_READBACKS=0|1|2` (reads of GPU-written memory by the game: 1 by default, 2
+-precise and slow, 0 off).
++precise and slow, 0 off), `BB_MOUSE_SENSITIVITY[_X|_Y]`, `BB_MOUSE_SMOOTHING` (0–0.95),
++`BB_MOUSE_INVERT_X|Y` (the same as the `mouse_*` lines of `bbport.ini`; the environment wins),
++`BB_AUDIO_SOFTCLIP=0` (no soft limiter on the audio output), `BB_AUDIO_PREFILL=N` (1–8 buffer
++periods of audio kept queued, 2 by default: more survives longer stalls of the audio thread),
++`BB_NCPU=N` (the core count the game reads, 7 by default).
++`python3 tools/frame_summary.py logs/<time>.frames.csv` summarizes a frame log (FPS, 1 % lows,
++stutter, GPU-bound or CPU-bound); `--compare` puts two runs side by side.
+ More in [docs/](docs); recent changes: [docs/CHANGES_0.4.md](docs/CHANGES_0.4.md) (in Russian),
+ [docs/CHANGES_2026-10-06.md](docs/CHANGES_2026-10-06.md).
+ 
+diff --git a/docs/CHANGES_2026-10-16.md b/docs/CHANGES_2026-10-16.md
+new file mode 100644
+index 0000000..731ef13
+--- /dev/null
++++ b/docs/CHANGES_2026-10-16.md
+@@ -0,0 +1,36 @@
++# Changes, 2026-10-16
++
++Ported from the Windows port (Mrsuss60/bloodborne_pc_windows_port), where they fit the Linux tree.
++
++## Mouse look (`src/runtime_pad.c`, launcher)
++- `mouse_smoothing=0..0.95` in `bbport.ini` (launcher: *Mouse smoothing*): an exponential filter on
++  the mouse motion. Its strength is per 1/60 s, so the smoothing lasts the same time at 60 and at
++  240 samples a second (the Windows port filters per sample). The filter keeps the total motion.
++  0, the default, is the raw behaviour as before.
++- `mouse_sensitivity_x` / `mouse_sensitivity_y` (one axis each; `mouse_sensitivity` sets both, later
++  lines win), `mouse_invert_x` (launcher: *Invert mouse X axis*).
++- The same settings in the environment (`BB_MOUSE_SENSITIVITY`, `_X`, `_Y`, `BB_MOUSE_SMOOTHING`,
++  `BB_MOUSE_INVERT_X`, `BB_MOUSE_INVERT_Y`) override the file, for tests.
++- Not ported: the Windows port's Shift+mouse chords (here Shift is Circle/dodge by default, so the
++  chord would roll while attacking) and its press-to-rebind UI (the launcher's *Controls* does that).
++
++## Audio (`src/runtime_audio.c`)
++- Soft-knee limiter on the output (linear to 0.8, then bending to 1.0 with no corner): a mix that
++  peaks past full scale is no longer cut flat. Nothing below 0.8 changes. `BB_AUDIO_SOFTCLIP=0`: off.
++- `BB_AUDIO_PREFILL=N` (1–8, default 2): buffer periods the queue is steered to hold. Raise it to 3–4
++  if the audio crackles when the CPU is the bottleneck.
++- The underrun count (the queue ran below one buffer) is printed with the audio summary at exit.
++- Not ported: the Windows port's default 1.4x output boost and its per-layout master gain; they
++  change the loudness of the whole game.
++
++## Kernel (`src/runtime_kernel.c`)
++- `BB_NCPU=N` (1–64) sets the `hw.ncpu` the game reads (7, the PS4's game cores, by default).
++
++## Tools
++- `tools/frame_summary.py`: FPS, frame-time percentiles, 1 % / 0.1 % lows, stutter counts and a
++  GPU-bound / CPU-bound verdict from a `BB_FRAME_LOG` csv (the launcher's *Save the log and
++  statistics to a file* writes one). `--compare` for A/B runs, `--skip` for the first seconds.
++
++## Tests
++- `tests/test_pad.c`: the settings' parsing and limits, the environment override, axis inversion,
++  separate sensitivities, and the smoothing filter (total motion kept, same spread at 60 and 240 Hz).
+diff --git a/launcher/bbport_i18n.py b/launcher/bbport_i18n.py
+index 9a2fcb4..9717ae8 100644
+--- a/launcher/bbport_i18n.py
++++ b/launcher/bbport_i18n.py
+@@ -250,6 +250,9 @@ EN = {
+     "Щелчок в окне игры захватывает мышь, F1 — отпускает": "A click in the game window takes the mouse, F1 releases it",
+     "Чувствительность мыши": "Mouse sensitivity",
+     "Инвертировать мышь по вертикали": "Invert mouse Y axis",
++    "Инвертировать мышь по горизонтали": "Invert mouse X axis",
++    "Сглаживание мыши": "Mouse smoothing",
++    "0 — без сглаживания; больше — плавнее, но с задержкой": "0 is raw; higher is smoother but lags a little",
+     "DLSS не найден: выберите библиотеку NVIDIA ниже (и нужна сборка с мостом DLSS). Игра включит FSR 3.1":
+         "DLSS not found: choose NVIDIA's library below (a build with the DLSS bridge is needed too). The game will use FSR 3.1",
+     "Нет или повреждён файл {}": "Missing or damaged file {}",
+@@ -742,6 +745,9 @@ ZH_CN = {
+     "Щелчок в окне игры захватывает мышь, F1 — отпускает": "在游戏窗口中单击以捕获鼠标，按 F1 释放",
+     "Чувствительность мыши": "鼠标灵敏度",
+     "Инвертировать мышь по вертикали": "反转鼠标纵轴",
++    "Инвертировать мышь по горизонтали": "反转鼠标横轴",
++    "Сглаживание мыши": "鼠标平滑",
++    "0 — без сглаживания; больше — плавнее, но с задержкой": "0 为原始输入；数值越大越平滑，但略有延迟",
+     "DLSS не найден: выберите библиотеку NVIDIA ниже (и нужна сборка с мостом DLSS). Игра включит FSR 3.1":
+         "未找到 DLSS：请在下方选择 NVIDIA 的库（还需要带 DLSS 桥接的版本）。游戏将改用 FSR 3.1",
+     "Нет или повреждён файл {}": "文件 {} 缺失或已损坏",
+diff --git a/launcher/bbport_launcher.py b/launcher/bbport_launcher.py
+index bfc08a5..b49bf18 100755
+--- a/launcher/bbport_launcher.py
++++ b/launcher/bbport_launcher.py
+@@ -170,7 +170,9 @@ INI_DEFAULTS = {
+     "live_resolution": "0",
+     "mouse_look": "1",
+     "mouse_sensitivity": "1.00",
++    "mouse_invert_x": "0",
+     "mouse_invert_y": "0",
++    "mouse_smoothing": "0.00",
+     **{key: "1" if default else "0" for key, _, default in EFFECTS},
+ }
+ 
+@@ -674,8 +676,22 @@ class LauncherWindow(Adw.ApplicationWindow):
+         self.mouse_invert_row = Adw.SwitchRow(title=tr("Инвертировать мышь по вертикали"),
+                                               active=self.ini.get("mouse_invert_y") == "1")
+         controls.add(self.mouse_invert_row)
++        self.mouse_invert_x_row = Adw.SwitchRow(title=tr("Инвертировать мышь по горизонтали"),
++                                                active=self.ini.get("mouse_invert_x") == "1")
++        controls.add(self.mouse_invert_x_row)
++        # 0 = the raw motion; higher spreads it over a few frames (runtime_pad.c, 1/60 s steps).
++        self.mouse_smoothing_row = Adw.SpinRow.new_with_range(0.0, 0.95, 0.05)
++        self.mouse_smoothing_row.set_title(tr("Сглаживание мыши"))
++        self.mouse_smoothing_row.set_subtitle(tr("0 — без сглаживания; больше — плавнее, но с задержкой"))
++        self.mouse_smoothing_row.set_digits(2)
++        try:
++            self.mouse_smoothing_row.set_value(float(self.ini.get("mouse_smoothing", "0")))
++        except ValueError:
++            self.mouse_smoothing_row.set_value(0.0)
++        controls.add(self.mouse_smoothing_row)
+         def mouse_rows_sensitive(*_):
+-            for row in (self.mouse_sensitivity_row, self.mouse_invert_row):
++            for row in (self.mouse_sensitivity_row, self.mouse_invert_row, self.mouse_invert_x_row,
++                        self.mouse_smoothing_row):
+                 row.set_sensitive(self.mouse_look_row.get_active())
+         self.mouse_look_row.connect("notify::active", mouse_rows_sensitive)
+         mouse_rows_sensitive()
+@@ -1060,6 +1076,8 @@ class LauncherWindow(Adw.ApplicationWindow):
+             "mouse_look": "1" if self.mouse_look_row.get_active() else "0",
+             "mouse_sensitivity": f"{self.mouse_sensitivity_row.get_value():.2f}",
+             "mouse_invert_y": "1" if self.mouse_invert_row.get_active() else "0",
++            "mouse_invert_x": "1" if self.mouse_invert_x_row.get_active() else "0",
++            "mouse_smoothing": f"{self.mouse_smoothing_row.get_value():.2f}",
+             **{key: "1" if row.get_active() else "0" for key, row in self.effect_rows.items()},
+         })
+         save_ini(self.ini, self.ini_lines)
+diff --git a/src/runtime_audio.c b/src/runtime_audio.c
+index 544cd99..4fa375b 100644
+--- a/src/runtime_audio.c
++++ b/src/runtime_audio.c
+@@ -55,6 +55,34 @@ static void sleep_until(uint64_t deadline) {
+     struct timespec t={(time_t)(deadline/1000000000u),(long)(deadline%1000000000u)};
+     while (clock_nanosleep(CLOCK_MONOTONIC,TIMER_ABSTIME,&t,NULL)) {}
+ }
++/* Soft-knee limiter (from the Windows port): linear up to 0.8 with unit slope, then bending toward
++ * 1.0 without a corner. A mix that peaks past full scale is no longer cut flat by the device
++ * (the buzz of square-wave clipping); nothing below 0.8 changes. BB_AUDIO_SOFTCLIP=0 turns it off. */
++static inline float soft_clip(float x) {
++    const float knee=0.8f, headroom=0.2f;
++    if (x>knee) { const float excess=x-knee; return knee+headroom*excess/(headroom+excess); }
++    if (x<-knee) { const float excess=-x-knee; return -knee-headroom*excess/(headroom+excess); }
++    return x;
++}
++static int soft_clip_enabled(void) {
++    static int enabled=-1;
++    if (enabled<0) { const char *v=getenv("BB_AUDIO_SOFTCLIP"); enabled=!(v && v[0]=='0'); }
++    return enabled;
++}
++/* Buffer periods of audio the SDL queue is steered to hold (BB_AUDIO_PREFILL, 1..8, default 2):
++ * more headroom survives longer stalls of the game's audio thread (a slow CPU, a loading
++ * hitch) at the price of that much more delay. */
++static int prefill_periods(void) {
++    static int periods=-1;
++    if (periods<0) {
++        const char *v=getenv("BB_AUDIO_PREFILL");
++        periods=v && *v ? atoi(v) : 2;
++        if (periods<1 || periods>8) periods=2;
++    }
++    return periods;
++}
++static uint64_t audio_underruns;
++
+ static int sdl_audio(void) {
+     if (sdl_ready<0) {
+         const char *mode=getenv("BB_AUDIO");
+@@ -156,11 +184,16 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
+         /* Apply per-channel volume and map PS4 8ch (L R C LFE SL SR BL BR) to SDL 7.1 order. */
+         unsigned char converted[2048*8*4];
+         static const int remap[8]={0,1,2,3,6,7,4,5};
++        const int soft=soft_clip_enabled();
+         for (size_t f=0;f<(size_t)p->frames;++f) for (int c=0;c<p->channels;++c) {
+             int target=p->channels==8 && !p->std_layout ? remap[c] : c;
+             size_t from=f*(size_t)p->channels+(size_t)c, to=f*(size_t)p->channels+(size_t)target;
+             float gain=(float)p->volume[c]/VOLUME_0DB;
+-            if (p->is_float) { float v; memcpy(&v,(const char *)data+from*4,4); v*=gain; memcpy(converted+to*4,&v,4); }
++            if (p->is_float) {
++                float v; memcpy(&v,(const char *)data+from*4,4); v*=gain;
++                if (soft) v=soft_clip(v);
++                memcpy(converted+to*4,&v,4);
++            }
+             else { int16_t v; memcpy(&v,(const char *)data+from*2,2); v=(int16_t)((float)v*gain); memcpy(converted+to*2,&v,2); }
+         }
+         if (p->dump) fwrite(converted,1,bytes,p->dump);
+@@ -190,8 +223,9 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
+         if (p->stream) {
+             /* The device drains the queue in quanta (21 ms on PipeWire), so the level
+                is a sawtooth: its minimum over ~32 buffers is what gets controlled. */
+-            int low=2*(int)bytes, queued=SDL_GetAudioStreamQueued(p->stream);
++            int low=prefill_periods()*(int)bytes, queued=SDL_GetAudioStreamQueued(p->stream);
+             if (queued<(int)bytes) {
++                __atomic_add_fetch(&audio_underruns,1,__ATOMIC_RELAXED);
+                 static const unsigned char silence[2048*8*4];
+                 SDL_PutAudioStreamData(p->stream,silence,low-queued<(int)bytes ? low-queued : (int)bytes);
+                 queued=low;
+@@ -268,4 +302,7 @@ static const RuntimeExport exports[]={
+     {"sceAudioOutGetLastOutputTime",audio_last_time},
+ };
+ uintptr_t runtime_audio_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
+-void runtime_audio_report(void) { printf("Runtime: audio ports opened=%zu, buffers output=%zu\n",ports_opened,buffers_out); }
++void runtime_audio_report(void) {
++    printf("Runtime: audio ports opened=%zu, buffers output=%zu, underruns=%llu\n",ports_opened,buffers_out,
++           (unsigned long long)__atomic_load_n(&audio_underruns,__ATOMIC_RELAXED));
++}
+diff --git a/src/runtime_kernel.c b/src/runtime_kernel.c
+index 19909ea..4e5ec4f 100644
+--- a/src/runtime_kernel.c
++++ b/src/runtime_kernel.c
+@@ -217,7 +217,15 @@ static ABI int32_t guest_sysctl(const int32_t *name,uint32_t namelen,void *old,u
+     }
+     if (name[0]==6 && (name[1]==7 || name[1]==3)) { /* hw.pagesize / hw.ncpu */
+         if (!oldlen) return fail_posix(EINVAL);
+-        int32_t value=name[1]==7 ? PAGE : 7;
++        /* hw.ncpu: the PS4's 7 game cores unless BB_NCPU (1..64) says otherwise: the game sizes
++         * its worker pools from it, so a 4-core PC may do better with a smaller number. */
++        static int32_t ncpu=-1;
++        if (ncpu<0) {
++            const char *env=getenv("BB_NCPU");
++            ncpu=env && *env ? atoi(env) : 7;
++            if (ncpu<1 || ncpu>64) ncpu=7;
++        }
++        int32_t value=name[1]==7 ? PAGE : ncpu;
+         if (old) { if (*oldlen<4) return fail_posix(ENOMEM); memcpy(old,&value,4); }
+         *oldlen=4; return 0;
+     }
+diff --git a/src/runtime_pad.c b/src/runtime_pad.c
+index 28e02cb..37fc458 100644
+--- a/src/runtime_pad.c
++++ b/src/runtime_pad.c
+@@ -355,16 +355,39 @@ static int key_from_name(const char *name) {
+     return s==SDL_SCANCODE_UNKNOWN ? -1 : (int)s;
+ }
+ /* Mouse look (bbport.ini): mouse_look=0 leaves the mouse alone; mouse_sensitivity (default 1:
+- * ~1000 pixels/s turn the camera at full speed), mouse_invert_y=1. */
+-static int mouse_look=1, mouse_invert_y;
+-static float mouse_sensitivity=1.0f;
++ * ~1000 pixels/s turn the camera at full speed) sets both axes, mouse_sensitivity_x / _y one axis
++ * (later lines win); mouse_invert_x=1, mouse_invert_y=1; mouse_smoothing=0..0.95 (default 0: raw)
++ * filters the motion over a few frames (the strength is per 1/60 s, so it feels the same at any
++ * frame rate). The same names in capitals with BB_ in front (BB_MOUSE_SENSITIVITY_X, ...) in the
++ * environment override the file. */
++static int mouse_look=1, mouse_invert_x, mouse_invert_y;
++static float mouse_sensitivity_x=1.0f, mouse_sensitivity_y=1.0f, mouse_smoothing;
++static float mouse_float_in_range(const char *text, float low, float high, float fallback) {
++    char *end=NULL;
++    const float v=strtof(text,&end);
++    return end!=text && v>=low && v<=high ? v : fallback;
++}
++static void mouse_env_overrides(void) {
++    const char *v;
++    if ((v=getenv("BB_MOUSE_SENSITIVITY")) && *v)
++        mouse_sensitivity_x=mouse_sensitivity_y=mouse_float_in_range(v,0.05f,20.0f,mouse_sensitivity_x);
++    if ((v=getenv("BB_MOUSE_SENSITIVITY_X")) && *v)
++        mouse_sensitivity_x=mouse_float_in_range(v,0.05f,20.0f,mouse_sensitivity_x);
++    if ((v=getenv("BB_MOUSE_SENSITIVITY_Y")) && *v)
++        mouse_sensitivity_y=mouse_float_in_range(v,0.05f,20.0f,mouse_sensitivity_y);
++    if ((v=getenv("BB_MOUSE_SMOOTHING")) && *v)
++        mouse_smoothing=mouse_float_in_range(v,0.0f,0.95f,mouse_smoothing);
++    if ((v=getenv("BB_MOUSE_INVERT_X")) && *v) mouse_invert_x=atoi(v)!=0;
++    if ((v=getenv("BB_MOUSE_INVERT_Y")) && *v) mouse_invert_y=atoi(v)!=0;
++}
+ /* key.<input>= / pad.<input>= lines of the settings file. */
+ static void load_bindings(void) {
+     bind_defaults();
+-    mouse_look=1; mouse_invert_y=0; mouse_sensitivity=1.0f;
++    mouse_look=1; mouse_invert_x=mouse_invert_y=0; mouse_sensitivity_x=mouse_sensitivity_y=1.0f;
++    mouse_smoothing=0.0f;
+     const char *path=getenv("BB_CONFIG");
+     FILE *f=path ? fopen(path,"r") : NULL;
+-    if (!f) return;
++    if (!f) { mouse_env_overrides(); return; }
+     char line[512];
+     while (fgets(line,sizeof line,f)) {
+         const int keyboard=!strncmp(line,"key.",4), pad=!strncmp(line,"pad.",4);
+@@ -372,11 +395,17 @@ static void load_bindings(void) {
+         if (eq && !keyboard && !pad) {
+             const char *value=eq+1;
+             if (!strncmp(line,"mouse_look=",11)) mouse_look=atoi(value)!=0;
++            else if (!strncmp(line,"mouse_invert_x=",15)) mouse_invert_x=atoi(value)!=0;
+             else if (!strncmp(line,"mouse_invert_y=",15)) mouse_invert_y=atoi(value)!=0;
+-            else if (!strncmp(line,"mouse_sensitivity=",18)) {
+-                const float v=strtof(value,NULL);
+-                if (v>=0.05f && v<=20.0f) mouse_sensitivity=v;
+-            }
++            else if (!strncmp(line,"mouse_sensitivity=",18))
++                mouse_sensitivity_x=mouse_sensitivity_y=
++                    mouse_float_in_range(value,0.05f,20.0f,mouse_sensitivity_x);
++            else if (!strncmp(line,"mouse_sensitivity_x=",20))
++                mouse_sensitivity_x=mouse_float_in_range(value,0.05f,20.0f,mouse_sensitivity_x);
++            else if (!strncmp(line,"mouse_sensitivity_y=",20))
++                mouse_sensitivity_y=mouse_float_in_range(value,0.05f,20.0f,mouse_sensitivity_y);
++            else if (!strncmp(line,"mouse_smoothing=",16))
++                mouse_smoothing=mouse_float_in_range(value,0.0f,0.95f,mouse_smoothing);
+             continue;
+         }
+         if ((!keyboard && !pad) || !eq) continue;
+@@ -402,6 +431,7 @@ static void load_bindings(void) {
+         }
+     }
+     fclose(f);
++    mouse_env_overrides();
+ }
+ /* The mouse while the window holds it: buttons, and the wheel as short presses (one per notch,
+  * each held and released for a few frames so the game sees it). */
+@@ -467,7 +497,7 @@ static void apply_keyboard(PadData *d, const bool *k) {
+  * small deflections, so a moving mouse starts past them (BB_MOUSE_DEADZONE, default 16 of 127):
+  * slow aiming still turns the camera. While the mouse moves it replaces the right stick. */
+ #define LOOK_TAU_US 60000.0f
+-static float look_x, look_y;
++static float look_x, look_y, look_smooth_x, look_smooth_y;
+ static uint64_t look_last_us;
+ static uint8_t look_axis(float value, uint8_t stick, int deadzone) {
+     if (value>-0.5f && value<0.5f) return stick;
+@@ -479,7 +509,7 @@ static uint8_t look_axis(float value, uint8_t stick, int deadzone) {
+ static void apply_mouse_look(PadData *d, double dx, double dy, uint64_t now, int captured) {
+     float dt=look_last_us && now>look_last_us ? (float)(now-look_last_us) : 0.0f;
+     look_last_us=now;
+-    if (!captured) { look_x=look_y=0; return; }
++    if (!captured) { look_x=look_y=look_smooth_x=look_smooth_y=0; return; }
+     if (dt>LOOK_TAU_US) dt=LOOK_TAU_US;
+     static int deadzone=-1;
+     if (deadzone<0) {
+@@ -487,9 +517,14 @@ static void apply_mouse_look(PadData *d, double dx, double dy, uint64_t now, int
+         deadzone=env && *env ? atoi(env) : 16;
+         if (deadzone<0 || deadzone>100) deadzone=16;
+     }
+-    const float gain=127.0f/(1000.0f*LOOK_TAU_US/1e6f)*mouse_sensitivity, decay=1.0f-dt/LOOK_TAU_US;
+-    look_x=look_x*decay+(float)dx*gain;
+-    look_y=look_y*decay+(float)(mouse_invert_y ? -dy : dy)*gain;
++    const float base_gain=127.0f/(1000.0f*LOOK_TAU_US/1e6f), decay=1.0f-dt/LOOK_TAU_US;
++    /* mouse_smoothing: an exponential filter on the motion, its strength per 1/60 s (0: raw). The
++     * filter keeps the total motion, so the camera still turns as far, only a little later. */
++    const float keep=mouse_smoothing>0.0f && dt>0.0f ? SDL_powf(mouse_smoothing,dt/16667.0f) : 0.0f;
++    look_smooth_x=look_smooth_x*keep+(float)(mouse_invert_x ? -dx : dx)*(1.0f-keep);
++    look_smooth_y=look_smooth_y*keep+(float)(mouse_invert_y ? -dy : dy)*(1.0f-keep);
++    look_x=look_x*decay+look_smooth_x*base_gain*mouse_sensitivity_x;
++    look_y=look_y*decay+look_smooth_y*base_gain*mouse_sensitivity_y;
+     look_x=look_x<-127 ? -127 : look_x>127 ? 127 : look_x;
+     look_y=look_y<-127 ? -127 : look_y>127 ? 127 : look_y;
+     d->right_x=look_axis(look_x,d->right_x,deadzone);
+diff --git a/tests/test_pad.c b/tests/test_pad.c
+index 4cf2a09..d8bee37 100644
+--- a/tests/test_pad.c
++++ b/tests/test_pad.c
+@@ -119,11 +119,70 @@ int main(void) {
+         for (int i=0;i<20;++i) apply_mouse_look(&m,0,0,1+(rate+61+i)*step,1);
+         assert(m.right_x==128);
+     }
++    /* Mouse look settings: one sensitivity for both axes, one per axis (later lines win), inversion,
++     * smoothing; the environment overrides the file; out-of-range values are ignored. */
++    {
++        char mouse_config[]="/tmp/bbport-mouse-config-XXXXXX";
++        const int mouse_fd=mkstemp(mouse_config);
++        assert(mouse_fd>=0);
++        const char text[]="mouse_sensitivity=2\nmouse_sensitivity_y=0.5\nmouse_invert_x=1\nmouse_smoothing=0.5\n"
++                          "mouse_sensitivity_x=999\n";
++        assert(write(mouse_fd,text,sizeof(text)-1)==(ssize_t)(sizeof(text)-1));
++        close(mouse_fd);
++        setenv("BB_CONFIG",mouse_config,1);
++        load_bindings();
++        assert(mouse_sensitivity_x==2.0f && mouse_sensitivity_y==0.5f && mouse_invert_x && !mouse_invert_y);
++        assert(mouse_smoothing==0.5f);
++        setenv("BB_MOUSE_SENSITIVITY_X","3",1);
++        setenv("BB_MOUSE_SMOOTHING","2",1); /* past 0.95: ignored */
++        setenv("BB_MOUSE_INVERT_Y","1",1);
++        load_bindings();
++        assert(mouse_sensitivity_x==3.0f && mouse_sensitivity_y==0.5f && mouse_smoothing==0.5f && mouse_invert_y);
++        unsetenv("BB_MOUSE_SENSITIVITY_X"); unsetenv("BB_MOUSE_SMOOTHING"); unsetenv("BB_MOUSE_INVERT_Y");
++        unlink(mouse_config);
++        unsetenv("BB_CONFIG");
++        load_bindings(); /* no file: the defaults */
++        assert(mouse_sensitivity_x==1.0f && mouse_sensitivity_y==1.0f && !mouse_invert_x && !mouse_invert_y &&
++               mouse_smoothing==0.0f);
++
++        /* Inversion of X, and independent speeds per axis. */
++        PadData m; memset(&m,0,sizeof m);
++        mouse_invert_x=1; mouse_sensitivity_y=0.5f;
++        look_x=look_y=look_smooth_x=look_smooth_y=0; look_last_us=1;
++        m.right_x=m.right_y=128;
++        apply_mouse_look(&m,8,8,1+16667,1);
++        assert(m.right_x<128 && m.right_y>128);
++        const int x_turn=128-m.right_x, y_turn=m.right_y-128;
++        assert(x_turn>y_turn);
++        mouse_invert_x=0; mouse_sensitivity_y=1.0f;
++
++        /* Smoothing: a single burst of motion spreads over a few frames, the total stays, and the
++         * spread lasts the same time at 60 and at 240 samples a second. */
++        mouse_smoothing=0.8f;
++        double ratio[2]; int index=0;
++        for (int rate=60;rate<=240;rate*=4,++index) {
++            const uint64_t step=1000000/(uint64_t)rate;
++            look_x=look_y=look_smooth_x=look_smooth_y=0; look_last_us=1;
++            double total=0, first=0, at_50ms=0;
++            for (int i=1;i<=rate;++i) { /* one second: the burst in the first sample */
++                m.right_x=m.right_y=128;
++                apply_mouse_look(&m,i==1 ? 100.0 : 0.0,0,1+(uint64_t)i*step,1);
++                total+=look_smooth_x;
++                if (i==1) first=look_smooth_x;
++                if ((uint64_t)(i-1)*step>=50000 && at_50ms==0) at_50ms=look_smooth_x;
++            }
++            assert(first>0 && first<30 && total>99.0 && total<101.0);
++            ratio[index]=at_50ms/first;
++        }
++        assert(ratio[0]-ratio[1]<0.08 && ratio[1]-ratio[0]<0.08);
++        mouse_smoothing=0.0f;
++        look_x=look_y=look_smooth_x=look_smooth_y=0;
++    }
+     mouse_wheel_step(1000000,0,2);
+     assert(wheel_phase[1]==1 && mouse_key_down(MOUSE_WHEEL_DOWN));
+     mouse_wheel_step(1070000,0,0);
+     assert(!mouse_key_down(MOUSE_WHEEL_DOWN));
+     mouse_wheel_step(1140000,0,0);
+     assert(mouse_key_down(MOUSE_WHEEL_DOWN) && wheel_pending[1]==0);
+-    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls, mouse");
++    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture, controls, mouse, mouse look settings");
+ }
+diff --git a/tools/frame_summary.py b/tools/frame_summary.py
+new file mode 100755
+index 0000000..d8ef840
+--- /dev/null
++++ b/tools/frame_summary.py
+@@ -0,0 +1,144 @@
++#!/usr/bin/env python3
++"""Summarize a BB_FRAME_LOG csv (the launcher's "Save the log and statistics to a file" writes one
++to logs/<time>.frames.csv; by hand: BB_FRAME_STATS=1 BB_FRAME_LOG=frames.csv).
++
++    python3 tools/frame_summary.py logs/20261016_160000.frames.csv [--skip 20] [--compare other.csv]
++
++Prints the frame rate, the frame-time percentiles, the "1 % / 0.1 % low" frame rates (the average
++of the slowest 1 % / 0.1 % of the frames) and the stutter counts, then says whether the run looks
++GPU-bound or CPU-bound:
++
++  present_wait_ms  time the frame preparation waited for the GPU to finish an earlier frame
++                   (BB_FRAMES_AHEAD): large = GPU-bound.
++  tick_wait_ms     time blocked in the scheduler on GPU work (fences, ticks).
++  stage_a_cpu_ms   CPU time of the command-decoding thread.
++
++--skip N drops the first N seconds (loading, shader compiles) so they do not hide the steady state.
++"""
++import argparse
++import csv
++import math
++import statistics
++import sys
++
++
++def load(path, skip_s):
++    rows = []
++    try:
++        handle = open(path, newline="")
++    except OSError as error:
++        sys.exit(f"frame_summary: {error}")
++    with handle:
++        for row in csv.DictReader(handle):
++            try:
++                if None in row.values() or None in row:  # a line cut off by a crash (or too long)
++                    continue
++                values = {k: float(v) for k, v in row.items()}
++                if values["t_s"] >= skip_s:
++                    rows.append(values)
++            except (ValueError, KeyError):
++                continue
++    return rows
++
++
++def percentile(sorted_values, fraction):
++    if not sorted_values:
++        return float("nan")
++    index = min(len(sorted_values) - 1, max(0, math.ceil(fraction * len(sorted_values)) - 1))
++    return sorted_values[index]
++
++
++def low_fps(frame_ms_desc, fraction):
++    count = max(1, int(len(frame_ms_desc) * fraction))
++    worst = frame_ms_desc[:count]
++    return 1000.0 / (sum(worst) / len(worst))
++
++
++def summarize(rows):
++    frames = [r["frame_ms"] for r in rows if r["frame_ms"] > 0]
++    if not frames:
++        return None
++    ordered = sorted(frames)
++    descending = ordered[::-1]
++    median = statistics.median(ordered)
++    total_s = sum(frames) / 1000.0
++    result = {
++        "frames": len(frames),
++        "seconds": total_s,
++        "fps": len(frames) / total_s,
++        "median_ms": median,
++        "p95_ms": percentile(ordered, 0.95),
++        "p99_ms": percentile(ordered, 0.99),
++        "max_ms": ordered[-1],
++        "low1_fps": low_fps(descending, 0.01),
++        "low01_fps": low_fps(descending, 0.001),
++        "over_2x_median": sum(1 for f in frames if f > 2 * median),
++        "over_50ms": sum(1 for f in frames if f > 50),
++        "over_100ms": sum(1 for f in frames if f > 100),
++    }
++    for column in ("present_wait_ms", "tick_wait_ms", "stage_a_cpu_ms", "draws", "compiles",
++                   "alloc_mb", "free_mb", "protect_ms", "create_ms"):
++        if all(column in r for r in rows):
++            result[column + "_mean"] = statistics.fmean(r[column] for r in rows)
++    result["compiles_total"] = sum(r.get("compiles", 0) for r in rows)
++    result["alloc_mb_total"] = sum(r.get("alloc_mb", 0) for r in rows)
++    result["free_mb_total"] = sum(r.get("free_mb", 0) for r in rows)
++    return result
++
++
++def verdict(s):
++    frame = s["median_ms"]
++    present = s.get("present_wait_ms_mean", 0.0)
++    if frame <= 0:
++        return "no data"
++    share = present / frame
++    if share > 0.35:
++        return (f"GPU-bound: the frame preparation waits {share:.0%} of the frame time for the GPU. "
++                "Lower the render cost (resolution/preset, BB_ANISO=4, effects) rather than the CPU's.")
++    if share < 0.08:
++        return (f"CPU-bound: the GPU is waited for only {share:.0%} of the frame. The game's code, the "
++                "CPU compatibility layer or the command processing limit the frame rate; a lower "
++                "resolution will not help.")
++    return f"Mixed: {share:.0%} of the frame is spent waiting for the GPU."
++
++
++def show(name, s):
++    print(f"== {name}")
++    if s is None:
++        print("   no frames")
++        return
++    print(f"   {s['frames']} frames in {s['seconds']:.0f} s: {s['fps']:.1f} FPS average")
++    print(f"   frame time: median {s['median_ms']:.2f} ms, p95 {s['p95_ms']:.2f}, p99 {s['p99_ms']:.2f}, "
++          f"max {s['max_ms']:.1f}")
++    print(f"   lows: 1% {s['low1_fps']:.1f} FPS, 0.1% {s['low01_fps']:.1f} FPS")
++    print(f"   stutter: {s['over_2x_median']} frames over 2x the median, {s['over_50ms']} over 50 ms, "
++          f"{s['over_100ms']} over 100 ms")
++    for column in ("present_wait_ms", "tick_wait_ms", "stage_a_cpu_ms"):
++        if column + "_mean" in s:
++            print(f"   {column}: mean {s[column + '_mean']:.2f}")
++    if "draws_mean" in s:
++        print(f"   draws per frame: {s['draws_mean']:.0f}; shader compiles: {s['compiles_total']:.0f}; "
++              f"device memory allocated {s['alloc_mb_total']:.0f} MB / freed {s['free_mb_total']:.0f} MB")
++    print(f"   {verdict(s)}")
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    parser.add_argument("csv")
++    parser.add_argument("--compare", help="a second csv, printed after the first for an A/B comparison")
++    parser.add_argument("--skip", type=float, default=20.0, help="seconds to skip at the start (default 20)")
++    args = parser.parse_args()
++    first = summarize(load(args.csv, args.skip))
++    show(args.csv, first)
++    if args.compare:
++        second = summarize(load(args.compare, args.skip))
++        show(args.compare, second)
++        if first and second:
++            print(f"== {args.compare} against {args.csv}: {second['fps'] - first['fps']:+.1f} FPS average, "
++                  f"{second['low1_fps'] - first['low1_fps']:+.1f} FPS 1% low, "
++                  f"{second['p99_ms'] - first['p99_ms']:+.2f} ms p99")
++    return 0 if first else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main())

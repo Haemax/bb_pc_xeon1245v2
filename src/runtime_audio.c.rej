@@ -1,0 +1,75 @@
+--- src/runtime_audio.c
++++ src/runtime_audio.c
+@@ -55,6 +55,34 @@ static void sleep_until(uint64_t deadline) {
+     struct timespec t={(time_t)(deadline/1000000000u),(long)(deadline%1000000000u)};
+     while (clock_nanosleep(CLOCK_MONOTONIC,TIMER_ABSTIME,&t,NULL)) {}
+ }
++/* Soft-knee limiter (from the Windows port): linear up to 0.8 with unit slope, then bending toward
++ * 1.0 without a corner. A mix that peaks past full scale is no longer cut flat by the device
++ * (the buzz of square-wave clipping); nothing below 0.8 changes. BB_AUDIO_SOFTCLIP=0 turns it off. */
++static inline float soft_clip(float x) {
++    const float knee=0.8f, headroom=0.2f;
++    if (x>knee) { const float excess=x-knee; return knee+headroom*excess/(headroom+excess); }
++    if (x<-knee) { const float excess=-x-knee; return -knee-headroom*excess/(headroom+excess); }
++    return x;
++}
++static int soft_clip_enabled(void) {
++    static int enabled=-1;
++    if (enabled<0) { const char *v=getenv("BB_AUDIO_SOFTCLIP"); enabled=!(v && v[0]=='0'); }
++    return enabled;
++}
++/* Buffer periods of audio the SDL queue is steered to hold (BB_AUDIO_PREFILL, 1..8, default 2):
++ * more headroom survives longer stalls of the game's audio thread (a slow CPU, a loading
++ * hitch) at the price of that much more delay. */
++static int prefill_periods(void) {
++    static int periods=-1;
++    if (periods<0) {
++        const char *v=getenv("BB_AUDIO_PREFILL");
++        periods=v && *v ? atoi(v) : 2;
++        if (periods<1 || periods>8) periods=2;
++    }
++    return periods;
++}
++static uint64_t audio_underruns;
++
+ static int sdl_audio(void) {
+     if (sdl_ready<0) {
+         const char *mode=getenv("BB_AUDIO");
+@@ -156,11 +184,16 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
+         /* Apply per-channel volume and map PS4 8ch (L R C LFE SL SR BL BR) to SDL 7.1 order. */
+         unsigned char converted[2048*8*4];
+         static const int remap[8]={0,1,2,3,6,7,4,5};
++        const int soft=soft_clip_enabled();
+         for (size_t f=0;f<(size_t)p->frames;++f) for (int c=0;c<p->channels;++c) {
+             int target=p->channels==8 && !p->std_layout ? remap[c] : c;
+             size_t from=f*(size_t)p->channels+(size_t)c, to=f*(size_t)p->channels+(size_t)target;
+             float gain=(float)p->volume[c]/VOLUME_0DB;
+-            if (p->is_float) { float v; memcpy(&v,(const char *)data+from*4,4); v*=gain; memcpy(converted+to*4,&v,4); }
++            if (p->is_float) {
++                float v; memcpy(&v,(const char *)data+from*4,4); v*=gain;
++                if (soft) v=soft_clip(v);
++                memcpy(converted+to*4,&v,4);
++            }
+             else { int16_t v; memcpy(&v,(const char *)data+from*2,2); v=(int16_t)((float)v*gain); memcpy(converted+to*2,&v,2); }
+         }
+         if (p->dump) fwrite(converted,1,bytes,p->dump);
+@@ -190,8 +223,9 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
+         if (p->stream) {
+             /* The device drains the queue in quanta (21 ms on PipeWire), so the level
+                is a sawtooth: its minimum over ~32 buffers is what gets controlled. */
+-            int low=2*(int)bytes, queued=SDL_GetAudioStreamQueued(p->stream);
++            int low=prefill_periods()*(int)bytes, queued=SDL_GetAudioStreamQueued(p->stream);
+             if (queued<(int)bytes) {
++                __atomic_add_fetch(&audio_underruns,1,__ATOMIC_RELAXED);
+                 static const unsigned char silence[2048*8*4];
+                 SDL_PutAudioStreamData(p->stream,silence,low-queued<(int)bytes ? low-queued : (int)bytes);
+                 queued=low;
+@@ -268,4 +302,7 @@ static const RuntimeExport exports[]={
+     {"sceAudioOutGetLastOutputTime",audio_last_time},
+ };
+ uintptr_t runtime_audio_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
+-void runtime_audio_report(void) { printf("Runtime: audio ports opened=%zu, buffers output=%zu\n",ports_opened,buffers_out); }
++void runtime_audio_report(void) {
++    printf("Runtime: audio ports opened=%zu, buffers output=%zu, underruns=%llu\n",ports_opened,buffers_out,
++           (unsigned long long)__atomic_load_n(&audio_underruns,__ATOMIC_RELAXED));
++}
