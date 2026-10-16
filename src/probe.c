@@ -8,6 +8,7 @@
 #include <cpuid.h>
 #include "runtime.h"
 #include "gpu/bbgpu.h"
+#include "cpu_compat.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
 #endif
@@ -46,7 +47,7 @@ static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message);
  * (andn/bextr/blsr/tzcnt), MOVBE, LZCNT and POPCNT, thousands of each in eboot.bin. A CPU without
  * them stops at the first one with SIGILL (exit code 132, issue #26), and lzcnt/tzcnt even run as
  * bsr/bsf there, with other results. Said before the game starts; BB_SKIP_CPU_CHECK=1 skips it. */
-static void check_cpu(void) {
+static void check_cpu(unsigned emulated) {
     const char *skip = getenv("BB_SKIP_CPU_CHECK");
     if (skip && !strcmp(skip, "1")) return;
     unsigned a, b, c, d, leaf1_c = 0, leaf7_b = 0, ext1_c = 0;
@@ -59,9 +60,11 @@ static void check_cpu(void) {
         __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
         avx = (lo & 6) == 6; /* the OS saves SSE and AVX state */
     }
+    /* emulated: CC_ bits of the features src/cpu_compat.c stands in for (--cpu-compat). */
     const struct { int present; const char *name; } features[] = {
-        {avx, "AVX"}, {(leaf7_b & bit_BMI) != 0, "BMI1"}, {(leaf1_c & bit_MOVBE) != 0, "MOVBE"},
-        {(ext1_c & bit_LZCNT) != 0, "LZCNT"}, {(leaf1_c & bit_POPCNT) != 0, "POPCNT"},
+        {avx, "AVX"}, {(emulated & CC_BMI1) || (leaf7_b & bit_BMI) != 0, "BMI1"},
+        {(emulated & CC_MOVBE) || (leaf1_c & bit_MOVBE) != 0, "MOVBE"},
+        {(emulated & CC_LZCNT) || (ext1_c & bit_LZCNT) != 0, "LZCNT"}, {(leaf1_c & bit_POPCNT) != 0, "POPCNT"},
         {(leaf1_c & bit_SSE4_2) != 0, "SSE4.2"},
     };
     char missing[64] = "";
@@ -74,7 +77,9 @@ static void check_cpu(void) {
     fprintf(stderr,
             "ERROR: this CPU lacks %s. Bloodborne's code was compiled for the PS4's CPU and uses "
             "these instructions directly: it needs an Intel Haswell (4th generation Core, 2013) or "
-            "newer, or an AMD Ryzen. BB_SKIP_CPU_CHECK=1 starts anyway.\n", missing);
+            "newer, or an AMD Ryzen. Started through run.sh, BMI1, MOVBE and LZCNT are emulated "
+            "(scripts/cpu_compat.py, needs binutils); AVX, POPCNT and SSE4.2 cannot be. "
+            "BB_SKIP_CPU_CHECK=1 starts anyway.\n", missing);
     exit(1);
 }
 static uint64_t read64(FILE *f) {
@@ -140,6 +145,7 @@ static ABI void guest_exit(void) { puts("Runtime: process finalizer callback rea
 #ifndef _WIN32
 static void fault(int sig, siginfo_t *info, void *context) {
     /* GPU page tracking (write-protected guest pages) is resolved first. */
+    if (sig == SIGILL && cc_handle_sigill(context)) return; /* BMI1/MOVBE/LZCNT on an older CPU */
     if (gpu_enabled && sig == SIGSEGV && bbgpu_handle_fault(context, info->si_addr)) return;
     /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
     if ((sig == SIGSEGV || sig == SIGBUS) && runtime_fault_recover) {
@@ -338,10 +344,9 @@ int main(int argc, char **argv) {
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
-    check_cpu();
     int cpu_only = 0, strict_imports = 0;
     unsigned timeout_seconds = 10;
-    const char *content_profile=NULL, *app0=NULL, *user_dir=NULL, *patch_file=NULL;
+    const char *content_profile=NULL, *app0=NULL, *user_dir=NULL, *patch_file=NULL, *compat_file=NULL;
     for (int i = 2; i < argc; ++i) {
         if (!strcmp(argv[i], "--cpu-only")) cpu_only = 1;
         else if (!strcmp(argv[i], "--strict-imports")) strict_imports = 1;
@@ -349,13 +354,25 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--app0") && i+1<argc) app0=argv[++i];
         else if (!strcmp(argv[i], "--user") && i+1<argc) user_dir=argv[++i];
         else if (!strcmp(argv[i], "--patches") && i+1<argc) patch_file=argv[++i];
+        else if (!strcmp(argv[i], "--cpu-compat") && i+1<argc) compat_file=argv[++i];
         else if (!strcmp(argv[i], "--timeout") && i+1<argc) timeout_seconds=(unsigned)strtoul(argv[++i],NULL,10);
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); return 1; }
     }
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--timeout seconds] | --vulkan-only\n", argv[0]);
+        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--cpu-compat file] [--timeout seconds] | --vulkan-only\n", argv[0]);
         return 1;
     }
+    /* --cpu-compat (scripts/cpu_compat.py): BMI1/MOVBE/LZCNT the CPU lacks are emulated; the table
+     * is ignored on a CPU that has them all unless BB_CPU_COMPAT=force (tests). */
+    unsigned emulated = 0;
+    if (compat_file) {
+        const char *force = getenv("BB_CPU_COMPAT");
+        emulated = cc_missing_features();
+        if (force && !strcmp(force, "force")) emulated = CC_BMI1 | CC_MOVBE | CC_LZCNT;
+        if (force && !strcmp(force, "0")) emulated = 0;
+        if (!emulated) compat_file = NULL;
+    }
+    check_cpu(emulated);
     if (content_profile) {
         FILE *profile=fopen(content_profile,"rb");
         unsigned char data[28];
@@ -498,6 +515,8 @@ int main(int argc, char **argv) {
     image = allocate(round_page(size));
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
+    /* The stubs' memory goes right after the image: a jump rel32 has to reach it. */
+    if (compat_file && cc_load(compat_file, size) < 0) fail("CPU compatibility table could not be loaded");
     if (!cpu_only) {
         char title[128]="Bloodborne", serial[16]="UNKNOWN", sfo[4096];
         uint32_t attributes=0;
@@ -542,6 +561,13 @@ int main(int argc, char **argv) {
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
     if (!cpu_only) bbgpu_patch_image(image, size);
+    if (compat_file) {
+        CcRange code[64];
+        size_t ncode = 0;
+        for (uint64_t i = 0; i < ns && ncode < 64; ++i)
+            if (segments[i].flags & 1) { code[ncode].address = segments[i].address; code[ncode].size = segments[i].size; ++ncode; }
+        if (cc_apply(image, size, code, ncode)) fail("CPU compatibility patching failed");
+    }
     protect(traps, round_page((import_count + 1) * 32), 5);
     protect(image, round_page(size), 0);
     int executable_entry = 0;

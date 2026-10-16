@@ -228,7 +228,30 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
     SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "${BB_USER_DIR:-$data/user}") || true
     export SHADPS4_HTTP_HOST_OVERRIDES_JSON
 fi
-probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
+# CPUs without BMI1, MOVBE or LZCNT (Intel before Haswell: Sandy/Ivy Bridge, Xeon E3 v1/v2): the game
+# uses them directly. scripts/cpu_compat.py lists them once per game version and the runtime
+# emulates them (src/cpu_compat.c). BB_CPU_COMPAT=1 forces it, 0 turns it off. Bash builtins only.
+compat_args=()
+need_compat=${BB_CPU_COMPAT:-auto}
+if [[ $need_compat == auto ]]; then
+    need_compat=0
+    if [[ -r /proc/cpuinfo ]]; then
+        while IFS= read -r line; do
+            if [[ $line == flags[[:space:]]*:* ]]; then
+                for flag in bmi1 movbe abm; do
+                    [[ " ${line#*:} " == *" $flag "* ]] || need_compat=1
+                done
+                break
+            fi
+        done < /proc/cpuinfo
+    fi
+fi
+if [[ $need_compat == 1 || $need_compat == force ]]; then
+    "$PYTHON" scripts/cpu_compat.py "$out/boot-linked.bin" --out "$out/cpucompat.bin"
+    compat_args=(--cpu-compat "$out/cpucompat.bin")
+    [[ $need_compat == force ]] && export BB_CPU_COMPAT=force
+fi
+probe_args=("$out/boot-linked.bin" "${compat_args[@]}" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then
     "$probe" "${probe_args[@]}" &
     mod_pid=$!

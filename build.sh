@@ -79,7 +79,10 @@ if [[ ! -f out/libatrac9.a || -n $(find third_party/LibAtrac9/C/src -newer out/l
     for source in "${atrac9[@]}"; do "$CC" -std=c99 -O2 -g -w -c "$source" -o "out/atrac9/$(basename "${source%.c}").o"; done
     ar rcs out/libatrac9.a out/atrac9/*.o
 fi
-"$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/vulkan_smoke.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/bb-probe
+# CPU compatibility layer (BMI1/MOVBE/LZCNT emulation for pre-Haswell CPUs). Called from stubs in the
+# middle of the game's code, where every vector register is live: no SSE/AVX instructions in it.
+"$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -mgeneral-regs-only -fno-tree-loop-distribute-patterns -Isrc -c src/cpu_compat.c -o out/cpu_compat.o
+"$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/vulkan_smoke.c out/cpu_compat.o out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/bb-probe
 echo "Built $PWD/out/bb-probe"
 # GPU check for run.sh (live_resolution=auto) and the launcher's gamepad list (--gamepads).
 "$CC" -std=c11 -O2 -Wall -Wextra -Werror "${includes[@]}" tools/gpu_capabilities.c "${libraries[@]}" -o out/bb-gpu-capabilities
@@ -88,6 +91,8 @@ if [[ ${1:-} == --test ]]; then
     out/pad-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test
     out/runtime-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -Isrc tests/test_cpu_compat.c out/cpu_compat.o -o out/cpu-compat-test
+    out/cpu-compat-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc tests/test_file_mods.c -o out/file-mods-test
     out/file-mods-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_sema.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/sema-test

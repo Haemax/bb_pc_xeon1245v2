@@ -1,0 +1,387 @@
+--- a/src/cpu_compat.c	2026-10-16 08:44:42.741652837 +0000
++++ b/src/cpu_compat.c	2026-10-16 08:43:42.002526321 +0000
+@@ -254,7 +254,7 @@
+ static uint64_t *targets;   /* BBCPUC3: direct branch targets that lie just after a listed site, sorted */
+ static size_t ntargets;
+ static int reloc_enabled;   /* the table lists the branch targets, so instructions may be relocated */
+-#define CC_STUB_SIZE 96     /* room for an in-process bit-scan, one relocated instruction and the jump back */
++#define CC_STUB_SIZE 128    /* room for an in-process bit-scan, one relocated instruction and the jump back */
+ 
+ extern void *runtime_low_map(size_t size, int prot) __attribute__((weak));
+ extern void cc_common(void);
+@@ -372,6 +372,234 @@
+     return (int)(p - out);
+ }
+ 
++
++/* ---- In-process BMI1 (andn, bextr, blsr, blsmsk, blsi) -------------------------------------------
++ * The same idea as the bit-scan stub: plain x86 instead of the call into cc_emulate (a full register
++ * save and a decode, ~150+ cycles). Flags are the architectural ones (CF/ZF/SF/OF); PF/AF, undefined
++ * for these instructions, are whatever the replacement leaves. A scratch register is saved on the
++ * stack below the 128-byte red zone only where one is needed. Memory operands with a segment
++ * prefix or RIP-relative addressing are left to the slow path. */
++typedef struct { unsigned char *p; } Em;
++static void e1(Em *e, unsigned v) { *e->p++ = (unsigned char)v; }
++static void erex(Em *e, int w, int r, int x, int b) {
++    unsigned v = 0x40u | (w ? 8u : 0u) | (r >= 8 ? 4u : 0u) | (x >= 8 ? 2u : 0u) | (b >= 8 ? 1u : 0u);
++    if (v != 0x40) e1(e, v);
++}
++static void emodrm(Em *e, int reg, int rm) { e1(e, 0xC0u | (unsigned)(reg & 7) << 3 | (unsigned)(rm & 7)); }
++/* op r/m(rm), r(reg) with a one-byte opcode */
++static void err(Em *e, unsigned op, int w, int rm, int reg) { erex(e, w, reg, 0, rm); e1(e, op); emodrm(e, reg, rm); }
++static void emov(Em *e, int w, int dst, int src) { if (dst != src || !w) err(e, 0x89, w, dst, src); }
++static void eunary(Em *e, unsigned op, int ext, int w, int r) { erex(e, w, 0, 0, r); e1(e, op); emodrm(e, ext, r); }          /* F7 /2 not, F7 /3 neg, FF /0 inc, FF /1 dec */
++static void eimm8(Em *e, int ext, int w, int r, int v) { erex(e, w, 0, 0, r); e1(e, 0x83); emodrm(e, ext, r); e1(e, (unsigned)v & 0xFF); } /* 83 /0 add, /7 cmp */
++static void epush(Em *e, int r) { if (r >= 8) e1(e, 0x41); e1(e, 0x50u | (unsigned)(r & 7)); }
++static void epop(Em *e, int r) { if (r >= 8) e1(e, 0x41); e1(e, 0x58u | (unsigned)(r & 7)); }
++static void elea_rsp(Em *e, int delta) { /* lea delta(%rsp),%rsp: leaves the flags alone */
++    e1(e, 0x48); e1(e, 0x8D);
++    if (delta >= -128 && delta <= 127) { e1(e, 0x64); e1(e, 0x24); e1(e, (unsigned)delta & 0xFF); }
++    else { e1(e, 0xA4); e1(e, 0x24); int32_t v = delta; memcpy(e->p, &v, 4); e->p += 4; }
++}
++/* [REX] opcode modrm for the instruction's own memory operand, `extra` added to an rsp-based displacement. */
++static int emem(Em *e, unsigned op, int w, int reg, const Dec *d, int extra, int two_byte) {
++    int64_t disp = d->disp + (d->base == 4 ? extra : 0);
++    if (disp < INT32_MIN || disp > INT32_MAX) return 0;
++    erex(e, w, reg, d->index, d->base);
++    if (two_byte) e1(e, 0x0F);
++    e1(e, op);
++    int32_t v = (int32_t)disp;
++    if (d->base < 0) {
++        e1(e, (unsigned)(reg & 7) << 3 | 4);
++        e1(e, (unsigned)d->scale << 6 | (unsigned)(d->index < 0 ? 4 : (d->index & 7)) << 3 | 5);
++    } else if (d->index >= 0 || (d->base & 7) == 4) {
++        e1(e, 0x80u | (unsigned)(reg & 7) << 3 | 4);
++        e1(e, (unsigned)d->scale << 6 | (unsigned)(d->index < 0 ? 4 : (d->index & 7)) << 3 | (unsigned)(d->base & 7));
++    } else e1(e, 0x80u | (unsigned)(reg & 7) << 3 | (unsigned)(d->base & 7));
++    memcpy(e->p, &v, 4); e->p += 4;
++    return 1;
++}
++static int pick_scratch(unsigned used) {
++    static const int order[] = {0, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 5};
++    for (size_t i = 0; i < sizeof order / sizeof *order; ++i) if (!(used & 1u << order[i])) return order[i];
++    return -1;
++}
++static unsigned used_regs(const Dec *d) {
++    unsigned u = 1u << 4;
++    if (d->base >= 0) u |= 1u << d->base;
++    if (d->index >= 0) u |= 1u << d->index;
++    if (d->isreg) u |= 1u << d->rm;
++    u |= 1u << d->reg | 1u << d->vvvv;
++    return u;
++}
++
++/* Builds the replacement code for the instruction at `insn` into `out` (cap bytes); returns its
++ * length, or 0 when the instruction has no in-process form. The code falls through at its end. */
++int cc_build_inline(unsigned char *out, size_t cap, const unsigned char *insn) {
++    Dec d;
++    unsigned char buf[160];
++    if (!decode(insn, &d)) return 0;
++    if (d.kind == K_TZCNT || d.kind == K_LZCNT) {
++        if (!d.isreg) return 0;
++        int n = cc_build_bitscan(buf, d.kind == K_TZCNT, d.opsz, d.reg, d.rm);
++        if (!n || (size_t)n > cap) return 0;
++        memcpy(out, buf, (size_t)n);
++        return n;
++    }
++    if ((d.kind == K_MOVBE_LOAD || d.kind == K_MOVBE_STORE) && d.opsz != 16 && !d.riprel && !d.seg && !d.isreg &&
++        d.reg != d.base && d.reg != d.index) {
++        /* movbe = mov + bswap, no flags and no stack: the store swaps the register, writes, swaps it back */
++        Em M = {buf};
++        const int mw = d.opsz == 64;
++        if (d.kind == K_MOVBE_LOAD) {
++            if (!emem(&M, 0x8B, mw, d.reg, &d, 0, 0)) return 0;
++            erex(&M, mw, 0, 0, d.reg); e1(&M, 0x0F); e1(&M, 0xC8u | (unsigned)(d.reg & 7));
++        } else if (mw) {
++            erex(&M, 1, 0, 0, d.reg); e1(&M, 0x0F); e1(&M, 0xC8u | (unsigned)(d.reg & 7));
++            if (!emem(&M, 0x89, 1, d.reg, &d, 0, 0)) return 0;
++            erex(&M, 1, 0, 0, d.reg); e1(&M, 0x0F); e1(&M, 0xC8u | (unsigned)(d.reg & 7));
++        } else {
++            /* 32-bit: bswap on the register would clear its upper half, so swap a copy */
++            int t = pick_scratch(used_regs(&d));
++            if (t < 0) return 0;
++            elea_rsp(&M, -128); epush(&M, t);
++            emov(&M, 0, t, d.reg);
++            erex(&M, 0, 0, 0, t); e1(&M, 0x0F); e1(&M, 0xC8u | (unsigned)(t & 7));
++            if (!emem(&M, 0x89, 0, t, &d, 136, 0)) return 0;
++            epop(&M, t); elea_rsp(&M, 128);
++        }
++        size_t mn = (size_t)(M.p - buf);
++        if (mn > cap) return 0;
++        memcpy(out, buf, mn);
++        return (int)mn;
++    }
++    if (d.kind < K_ANDN || d.kind > K_BLSI) return 0;
++    if (!d.isreg && (d.riprel || d.seg)) return 0;
++    Em E = {buf}, *e = &E;
++    const int w = d.opsz == 64, mem = !d.isreg;
++    int dst, a = -1, src = d.rm;       /* andn: dst = ~a & src; bextr: ctrl in a; blsX: dst = f(src) */
++    dst = (d.kind >= K_BLSR) ? d.vvvv : d.reg;
++    a = d.vvvv;
++    int t = -1;
++    unsigned char *fix[8]; int nfix = 0;
++#define JCC(opc) do { e1(e, opc); fix[nfix++] = e->p; e1(e, 0); } while (0)
++#define HERE(k) (*fix[k] = (unsigned char)(e->p - (fix[k] + 1)))
++
++    if (d.kind == K_ANDN) {
++        if (!mem) {
++            if (dst != src) { emov(e, w, dst, a); eunary(e, 0xF7, 2, w, dst); err(e, 0x21, w, dst, src); }
++            else { err(e, 0x09, w, dst, a); err(e, 0x31, w, dst, a); }
++        } else if (dst != a) {
++            if (!emem(e, 0x8B, w, dst, &d, 0, 0)) return 0;
++            err(e, 0x09, w, dst, a); err(e, 0x31, w, dst, a);
++        } else {
++            t = pick_scratch(used_regs(&d));
++            if (t < 0) return 0;
++            elea_rsp(e, -128); epush(e, t);
++            if (!emem(e, 0x8B, w, t, &d, 136, 0)) return 0;
++            eunary(e, 0xF7, 2, w, dst); err(e, 0x21, w, dst, t);
++            epop(e, t); elea_rsp(e, 128);
++        }
++    } else if (d.kind == K_BEXTR) {
++        unsigned used = used_regs(&d) | 2u;
++        t = pick_scratch(used);
++        if (t < 0) return 0;
++        const int ctrl = a;
++        elea_rsp(e, -128); epush(e, 1); epush(e, t);
++        if (mem) { if (!emem(e, 0x8B, w, t, &d, 144, 0)) return 0; } else emov(e, w, t, src);
++        if (ctrl != 1) emov(e, 0, 1, ctrl);                        /* mov ctrl32,%ecx */
++        e1(e, 0x80); e1(e, 0xF9); e1(e, d.opsz);                    /* cmp $opsz,%cl */
++        JCC(0x73);                                                  /* jae zero */
++        erex(e, w, 0, 0, t); e1(e, 0xD3); emodrm(e, 5, t);          /* shr %cl,t */
++        e1(e, 0x0F); e1(e, 0xB6); e1(e, 0xCD);                      /* movzbl %ch,%ecx */
++        e1(e, 0x84); e1(e, 0xC9);                                   /* test %cl,%cl */
++        JCC(0x74);                                                  /* jz zero */
++        e1(e, 0x80); e1(e, 0xF9); e1(e, d.opsz);                    /* cmp $opsz,%cl */
++        JCC(0x73);                                                  /* jae final */
++        e1(e, 0xF6); e1(e, 0xD9);                                   /* neg %cl */
++        e1(e, 0x80); e1(e, 0xC1); e1(e, d.opsz);                    /* add $opsz,%cl */
++        erex(e, w, 0, 0, t); e1(e, 0xD3); emodrm(e, 4, t);          /* shl %cl,t */
++        erex(e, w, 0, 0, t); e1(e, 0xD3); emodrm(e, 5, t);          /* shr %cl,t */
++        e1(e, 0xEB); fix[nfix++] = e->p; e1(e, 0);                  /* jmp final */
++        HERE(0); HERE(1);                                           /* zero: */
++        err(e, 0x31, 0, t, t);                                      /* xor t32,t32 */
++        HERE(2); HERE(3);                                           /* final: */
++        err(e, 0x85, w, t, t);                                      /* test t,t: ZF, SF; CF = OF = 0 */
++        if (dst == 1) {                                             /* the result goes into rcx's saved slot */
++            erex(e, 1, t, 0, 0); e1(e, 0x89); e1(e, 0x44u | (unsigned)(t & 7) << 3); e1(e, 0x24); e1(e, 8); /* mov %t,8(%rsp): 64-bit, t is zero-extended */
++        } else emov(e, w, dst, t);
++        epop(e, t); epop(e, 1); elea_rsp(e, 128);
++        goto done;
++    } else {
++        /* blsr / blsmsk / blsi: dst = f(src); a source in memory goes through a scratch register */
++        int s = src;
++        if (mem) {
++            t = pick_scratch(used_regs(&d));
++            if (t < 0) return 0;
++            elea_rsp(e, -128); epush(e, t);
++            if (!emem(e, 0x8B, w, t, &d, 136, 0)) return 0;
++            s = t;
++        }
++        int sc = -1;
++        if (!mem && dst == s) { sc = pick_scratch(used_regs(&d)); if (sc < 0) return 0; elea_rsp(e, -128); epush(e, sc); }
++        if (d.kind == K_BLSR) {
++            if (dst != s) {
++                erex(e, w, dst, 0, s); e1(e, 0x8D); e1(e, 0x40u | (unsigned)(dst & 7) << 3 | (unsigned)(s & 7)); /* lea -1(s),dst */
++                if ((s & 7) == 4) return 0;
++                e1(e, 0xFF);
++                err(e, 0x21, w, dst, s);                              /* and s,dst */
++                JCC(0x75);                                            /* jnz done */
++                eimm8(e, 7, w, s, 1);                                 /* cmp $1,s: CF = (s == 0) */
++                eunary(e, 0xFF, 1, w, dst); eunary(e, 0xFF, 0, w, dst); /* dec/inc: ZF = 1, CF kept */
++                HERE(0);
++            } else {
++                erex(e, w, sc, 0, s); e1(e, 0x8D); e1(e, 0x40u | (unsigned)(sc & 7) << 3 | (unsigned)(s & 7));
++                if ((s & 7) == 4) return 0;
++                e1(e, 0xFF);                                          /* lea -1(s),sc */
++                err(e, 0x21, w, dst, sc);                             /* and sc,dst */
++                JCC(0x75);
++                eimm8(e, 0, w, sc, 1);                                /* add $1,sc: CF = (s was 0) */
++                eunary(e, 0xFF, 1, w, dst); eunary(e, 0xFF, 0, w, dst);
++                HERE(0);
++            }
++        } else if (d.kind == K_BLSMSK) {
++            err(e, 0x85, w, s, s);                                    /* test s,s */
++            JCC(0x74);                                                /* jz zero */
++            if (dst != s) {
++                erex(e, w, dst, 0, s); e1(e, 0x8D); e1(e, 0x40u | (unsigned)(dst & 7) << 3 | (unsigned)(s & 7));
++                if ((s & 7) == 4) return 0;
++                e1(e, 0xFF);
++                err(e, 0x31, w, dst, s);                              /* xor s,dst */
++            } else {
++                erex(e, w, sc, 0, s); e1(e, 0x8D); e1(e, 0x40u | (unsigned)(sc & 7) << 3 | (unsigned)(s & 7));
++                if ((s & 7) == 4) return 0;
++                e1(e, 0xFF);
++                err(e, 0x31, w, dst, sc);
++            }
++            e1(e, 0xEB); fix[nfix++] = e->p; e1(e, 0);                /* jmp done */
++            HERE(0);                                                  /* zero: s == 0 -> all ones, CF = 1, SF = 1, ZF = 0 */
++            eimm8(e, 7, w, s, 1);                                     /* cmp $1,s */
++            if (w) { erex(e, 1, 0, 0, dst); e1(e, 0xC7); emodrm(e, 0, dst); { int32_t m1 = -1; memcpy(e->p, &m1, 4); e->p += 4; } }
++            else { if (dst >= 8) e1(e, 0x41); e1(e, 0xB8u | (unsigned)(dst & 7)); { uint32_t m1 = 0xFFFFFFFFu; memcpy(e->p, &m1, 4); e->p += 4; } }
++            HERE(1);
++        } else { /* K_BLSI */
++            if (dst != s) { emov(e, w, dst, s); eunary(e, 0xF7, 3, w, dst); err(e, 0x21, w, dst, s); }
++            else { emov(e, w, sc, s); eunary(e, 0xF7, 3, w, sc); err(e, 0x21, w, dst, sc); }
++            JCC(0x74);                                                /* jz done: CF = 0 */
++            e1(e, 0xF9);                                              /* stc */
++            HERE(0);
++        }
++        if (sc >= 0) { epop(e, sc); elea_rsp(e, 128); }
++        if (mem) { epop(e, t); elea_rsp(e, 128); }
++    }
++done:
++#undef JCC
++#undef HERE
++    {
++        size_t n = (size_t)(e->p - buf);
++        if (n > cap || n > sizeof buf) return 0;
++        memcpy(out, buf, n);
++        return (int)n;
++    }
++}
++
+ /* Length of the instruction at `p` when it can be copied elsewhere unchanged: mov $imm32,r; the
+  * plain register/memory ALU forms; lea; ALU $imm8 - none of them RIP-relative, none a branch.
+  * 0 otherwise. */
+@@ -521,8 +749,8 @@
+         unsigned char *stub = stub_memory ? stub_memory + nsites * CC_STUB_SIZE : NULL;
+         intptr_t rel = stub ? (intptr_t)(stub - (site + 5)) : 0;
+         int bs_len = 0;
+-        unsigned char body[48];
+-        if (stub && (d.kind == K_TZCNT || d.kind == K_LZCNT) && d.isreg) bs_len = cc_build_bitscan(body, d.kind == K_TZCNT, d.opsz, d.reg, d.rm);
++        unsigned char body[CC_STUB_SIZE];
++        if (stub) bs_len = cc_build_inline(body, CC_STUB_SIZE - 5, window);
+         int rl = 0; /* instruction after a short site that moves into the stub, making room for a jmp rel32 */
+         if (bs_len && d.len < 5 && reloc_enabled && off + 4 + 15 <= image_size && d.len == 4) {
+             rl = reloc_len(image + off + 4);
+@@ -604,7 +832,7 @@
+     printf("CPU compatibility: %zu instructions emulated (%zu through stubs, %zu through SIGILL), %zu table entries skipped\n",
+            nsites, jumps, traps, skipped);
+     printf("CPU compatibility: %zu of the stubs are reached through padding trampolines, %zu padding caves available\n", tramps, ncaves);
+-    printf("CPU compatibility: %zu lzcnt/tzcnt sites run in-process without a call (%zu of them by relocating the next instruction)%s\n", inlined, relocated,
++    printf("CPU compatibility: %zu instructions run in-process without a call (%zu of them by relocating the next instruction)%s\n", inlined, relocated,
+            reloc_enabled ? "" : "; relocation off: the table has no branch targets");
+     const char *stats = getenv("BB_CPU_COMPAT_STATS");
+     if (stats && *stats && strcmp(stats, "0") && nsites) {
+--- a/src/cpu_compat.h	2026-10-16 08:44:42.742379915 +0000
++++ b/src/cpu_compat.h	2026-10-16 08:33:49.344469342 +0000
+@@ -36,6 +36,11 @@
+  * and returns its length, 0 if not buildable. Exposed for the tests. */
+ int cc_build_bitscan(unsigned char *out, int tzcnt, int opsz, int dst, int src);
+ 
++/* In-process form of any handled instruction (bit-scans and BMI1; register forms, and memory forms of
++ * BMI1 without segment prefix or RIP-relative addressing): writes it to `out` (at most `cap` bytes) and
++ * returns its length, 0 if there is none. Falls through at its end. Exposed for the tests. */
++int cc_build_inline(unsigned char *out, size_t cap, const unsigned char *insn);
++
+ typedef struct { uint64_t address, size; } CcRange;
+ 
+ /* Step 1 (right after the image is allocated): reads the site table written by
+--- a/tests/test_cpu_compat.c	2026-10-16 08:44:42.742731585 +0000
++++ b/tests/test_cpu_compat.c	2026-10-16 08:44:35.449138250 +0000
+@@ -227,9 +227,9 @@
+         patched(a, b, y);
+         for (int j = 0; j < 15; ++j) {
+             uint64_t mx = x[j], my = y[j];
+-            if (j == 3 || j == 7) { mx &= F_ARITH & ~0x10 /* AF */; my &= F_ARITH & ~0x10; mx &= ~4ull; my &= ~4ull; }
++            if (j == 3 || j == 7 || j == 11) { mx &= F_ARITH & ~0x10 /* AF */; my &= F_ARITH & ~0x10; mx &= ~4ull; my &= ~4ull; }
+             if (j == 3) { mx &= F_CF | F_ZF; my &= F_CF | F_ZF; }
+-            if (j == 7) { mx &= F_CF | F_ZF | F_SF | F_OF; my &= F_CF | F_ZF | F_SF | F_OF; }
++            if (j == 7 || j == 11) { /* 11: the red-zone slot the guest's pushfq left behind (andn's flags) */ mx &= F_CF | F_ZF | F_SF | F_OF; my &= F_CF | F_ZF | F_SF | F_OF; }
+             if (mx != my) {
+                 char d[200];
+                 snprintf(d, sizeof d, "slot %d: original %016llx patched %016llx (a=%016llx b=%016llx)", j, (unsigned long long)mx,
+@@ -276,6 +276,84 @@
+                 }
+ }
+ 
++/* The in-process forms (cc_build_inline) of the BMI1 and MOVBE instructions against the real ones: every
++ * register role combination, memory operands [rsi+d], [rsp+d] and [rsi+r9*4+d], 32 and 64 bits. */
++static unsigned char *enc_bmi(unsigned char *p, int kind, int w, int reg, int vvvv, int rm, int base, int index, int mem, int disp) {
++    int R = reg >= 8, X = mem && index >= 8, B = mem ? base >= 8 : rm >= 8;
++    int regf = kind < 2 ? reg : kind - 0; /* blsr /1, blsmsk /2, blsi /3 */
++    *p++ = 0xC4; *p++ = (unsigned char)((!R) << 7 | (!X) << 6 | (!B) << 5 | 2);
++    *p++ = (unsigned char)(w << 7 | ((~vvvv) & 15) << 3);
++    *p++ = kind == 0 ? 0xF2 : kind == 1 ? 0xF7 : 0xF3;
++    if (!mem) *p++ = (unsigned char)(0xC0 | (regf & 7) << 3 | (rm & 7));
++    else {
++        int sib = index >= 0 || (base & 7) == 4;
++        *p++ = (unsigned char)(0x80 | (regf & 7) << 3 | (sib ? 4 : (base & 7)));
++        if (sib) *p++ = (unsigned char)(2 << 6 | (index >= 0 ? index & 7 : 4) << 3 | (base & 7));
++        memcpy(p, &disp, 4); p += 4;
++    }
++    return p;
++}
++static void test_inline(void) {
++    static uint64_t area[64];
++    unsigned char *native = exec_buf + 512, *stub = exec_buf + 1024;
++    static const char *const names[] = {"andn", "bextr", "blsr", "blsmsk", "blsi", "movbe-load", "movbe-store"};
++    for (int kind = 0; kind < 7; ++kind)
++        for (int w = 0; w < 2; ++w)
++            for (int mm = 0; mm < 4; ++mm)
++                for (int x = 0; x < 16; ++x)
++                    for (int y = 0; y < 16; ++y)
++                        for (int z = 0; z < (mm ? 1 : 16); ++z) {
++                            int reg = x, vvvv = y, rm = z, base = -1, index = -1, disp = 0, ismem = mm != 0;
++                            if (mm == 1) { base = 6; disp = 0x20; }
++                            if (mm == 2) { base = 4; disp = 0x20; }
++                            if (mm == 3) { base = 6; index = 9; disp = 8; }
++                            if (reg == 4 || vvvv == 4 || (!ismem && rm == 4)) continue;
++                            if (ismem && (mm == 1 || mm == 3) && (reg == 6 || vvvv == 6)) continue;
++                            if (ismem && mm == 3 && (reg == 9 || vvvv == 9)) continue;
++                            unsigned char *p = native;
++                            if (kind >= 5) {
++                                if (!ismem || vvvv != 0 || (kind == 6 && mm == 2)) continue;
++                                unsigned rex = 0x40u | (w ? 8u : 0u) | (reg >= 8 ? 4u : 0u) | (index >= 8 ? 2u : 0u) | (base >= 8 ? 1u : 0u);
++                                if (rex != 0x40) *p++ = (unsigned char)rex;
++                                *p++ = 0x0F; *p++ = 0x38; *p++ = kind == 5 ? 0xF0 : 0xF1;
++                                int sib = index >= 0 || (base & 7) == 4;
++                                *p++ = (unsigned char)(0x80 | (reg & 7) << 3 | (sib ? 4 : (base & 7)));
++                                if (sib) *p++ = (unsigned char)(2 << 6 | (index >= 0 ? index & 7 : 4) << 3 | (base & 7));
++                                memcpy(p, &disp, 4); p += 4;
++                            } else p = enc_bmi(p, kind, w, reg, vvvv, rm, base, index, ismem, disp);
++                            unsigned char insn[16] = {0};
++                            memcpy(insn, native, (size_t)(p - native));
++                            *p++ = 0xC3;
++                            int n = cc_build_inline(stub, 120, insn);
++                            if (!n) continue;
++                            stub[n] = 0xC3;
++                            for (int r = 0; r < 40; ++r) {
++                                CcRegs a, b;
++                                for (int i = 0; i < 16; ++i) a.r[i] = interesting();
++                                a.r[4] = 0;
++                                if (kind == 1 && (rnd() & 3) && vvvv != 4) a.r[vvvv] = (rnd() % 70) | ((rnd() % 70) << 8) | (rnd() & ~0xFFFFull);
++                                a.r[6] = (uint64_t)(uintptr_t)area;
++                                if (mm == 3) a.r[9] = rnd() % 3;
++                                for (int i = 0; i < 64; ++i) area[i] = interesting();
++                                a.rflags = (rnd() & F_ARITH) | 0x2;
++                                a.rip = 0;
++                                b = a;
++                                uint64_t before[64], after_native[64];
++                                memcpy(before, area, sizeof area);
++                                run_native(&a, native);
++                                memcpy(after_native, area, sizeof area);
++                                memcpy(area, before, sizeof area);
++                                run_native(&b, stub);
++                                unsigned mask = kind >= 5 ? 0u : kind == 1 ? (F_CF | F_ZF | F_OF) : (F_CF | F_ZF | F_SF | F_OF);
++                                int bad = (a.rflags & mask) != (b.rflags & mask) || memcmp(after_native, area, sizeof area);
++                                for (int i = 0; i < 16; ++i) if (i != 4 && a.r[i] != b.r[i]) bad = 1;
++                                char detail[96];
++                                snprintf(detail, sizeof detail, "%s%d mode %d reg %d vvvv %d rm %d", names[kind], w ? 64 : 32, mm, reg, vvvv, rm);
++                                expect(!bad, "inline", detail);
++                            }
++                        }
++}
++
+ int main(void) {
+     unsigned missing = cc_missing_features();
+     if (missing) {
+@@ -284,6 +362,7 @@
+     }
+     exec_buf = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+     test_bitscan();
++    test_inline();
+     struct { const char *name; const unsigned char *s, *e; unsigned mask; } cases[] = {
+ #define C(n, m) {#n, n##_s, n##_e, m}
+         C(lz1, F_CF | F_ZF), C(lz2, F_CF | F_ZF), C(lz3, F_CF | F_ZF), C(lz4, F_CF | F_ZF), C(lz5, F_CF | F_ZF),
